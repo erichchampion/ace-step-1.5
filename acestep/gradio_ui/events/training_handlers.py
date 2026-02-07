@@ -110,8 +110,6 @@ def auto_label_all(
     if llm_handler is None or not llm_handler.llm_initialized:
         return builder_state.get_samples_dataframe_data(), "� LLM not initialized. Please initialize the service with LLM enabled.", builder_state
 
-    debug_log_for("dataset", f"UI preprocess_dataset: output_dir='{output_dir.strip()}'")
-
     def progress_callback(msg):
         if progress:
             try:
