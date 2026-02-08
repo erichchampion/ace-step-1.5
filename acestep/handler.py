@@ -460,6 +460,10 @@ class AceStepHandler:
                 logger.info(f"[initialize_service] {msg}")
 
             # Check and download the requested DiT model
+            if config_path == "":
+                logger.warning(
+                    "[initialize_service] Empty config_path; pass None to use the default model."
+                )
             if not check_model_exists(config_path, checkpoint_path):
                 logger.info(f"[initialize_service] DiT model '{config_path}' not found, starting auto-download...")
                 success, msg = ensure_dit_model(config_path, checkpoint_path, prefer_source=prefer_source)

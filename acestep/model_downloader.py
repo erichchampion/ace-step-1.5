@@ -492,6 +492,8 @@ def ensure_dit_model(
         print("=" * 60 + "\n")
         return download_submodel(model_name, checkpoints_dir, token=token, prefer_source=prefer_source)
 
+    if not model_name:
+        return False, "Unknown DiT model: '' (pass None for default or choose a valid model)"
     return False, f"Unknown DiT model: {model_name}"
 
 
