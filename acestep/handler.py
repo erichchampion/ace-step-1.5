@@ -44,7 +44,7 @@ from acestep.constants import (
     SFT_GEN_PROMPT,
     DEFAULT_DIT_INSTRUCTION,
 )
-from acestep.core.generation.handler import LoraManagerMixin, ProgressMixin
+from acestep.core.generation.handler import InitServiceMixin, LoraManagerMixin, ProgressMixin
 from acestep.dit_alignment_score import MusicStampsAligner, MusicLyricScorer
 from acestep.gpu_config import get_gpu_memory_gb, get_global_gpu_config, get_effective_free_vram_gb
 
@@ -52,7 +52,7 @@ from acestep.gpu_config import get_gpu_memory_gb, get_global_gpu_config, get_eff
 warnings.filterwarnings("ignore")
 
 
-class AceStepHandler(LoraManagerMixin, ProgressMixin):
+class AceStepHandler(InitServiceMixin, LoraManagerMixin, ProgressMixin):
     """ACE-Step Business Logic Handler"""
     
     def __init__(self):
@@ -213,57 +213,6 @@ class AceStepHandler(LoraManagerMixin, ProgressMixin):
             "time_costs": result["time_costs"],
         }
 
-    def get_available_checkpoints(self) -> str:
-        """Return project root directory path"""
-        # Get project root (handler.py is in acestep/, so go up two levels to project root)
-        project_root = self._get_project_root()
-        # default checkpoints
-        checkpoint_dir = os.path.join(project_root, "checkpoints")
-        if os.path.exists(checkpoint_dir):
-            return [checkpoint_dir]
-        else:
-            return []
-    
-    def get_available_acestep_v15_models(self) -> List[str]:
-        """Scan and return all model directory names starting with 'acestep-v15-'"""
-        # Get project root
-        project_root = self._get_project_root()
-        checkpoint_dir = os.path.join(project_root, "checkpoints")
-        
-        models = []
-        if os.path.exists(checkpoint_dir):
-            # Scan all directories starting with 'acestep-v15-' in checkpoints folder
-            for item in os.listdir(checkpoint_dir):
-                item_path = os.path.join(checkpoint_dir, item)
-                if os.path.isdir(item_path) and item.startswith("acestep-v15-"):
-                    models.append(item)
-        
-        # Sort by name
-        models.sort()
-        return models
-    
-    def is_flash_attention_available(self, device: Optional[str] = None) -> bool:
-        """Check whether flash attention can be used on the target device."""
-        target_device = str(device or self.device or "auto").split(":", 1)[0]
-        if target_device == "auto":
-            if not torch.cuda.is_available():
-                return False
-        elif target_device != "cuda":
-            return False
-        if not torch.cuda.is_available():
-            return False
-        try:
-            import flash_attn
-            return True
-        except ImportError:
-            return False
-    
-    def is_turbo_model(self) -> bool:
-        """Check if the currently loaded model is a turbo model"""
-        if self.config is None:
-            return False
-        return getattr(self.config, 'is_turbo', False)
-    
     def initialize_service(
         self,
         project_root: str,
@@ -633,41 +582,6 @@ class AceStepHandler(LoraManagerMixin, ProgressMixin):
             return f"Switched to training preset (quantization disabled).\n{status}", True
         return f"Failed to switch to training preset.\n{status}", False
     
-    def _empty_cache(self):
-        """Clear accelerator memory cache (CUDA, XPU, or MPS)."""
-        device_type = self.device if isinstance(self.device, str) else self.device.type
-        if device_type == "cuda" and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        elif device_type == "xpu" and hasattr(torch, 'xpu') and torch.xpu.is_available():
-            torch.xpu.empty_cache()
-        elif device_type == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-
-    def _synchronize(self):
-        """Synchronize accelerator operations (CUDA, XPU, or MPS)."""
-        device_type = self.device if isinstance(self.device, str) else self.device.type
-        if device_type == "cuda" and torch.cuda.is_available():
-            torch.cuda.synchronize()
-        elif device_type == "xpu" and hasattr(torch, 'xpu') and torch.xpu.is_available():
-            torch.xpu.synchronize()
-        elif device_type == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            torch.mps.synchronize()
-
-    def _memory_allocated(self):
-        """Get current accelerator memory usage in bytes, or 0 for unsupported backends."""
-        device_type = self.device if isinstance(self.device, str) else self.device.type
-        if device_type == "cuda" and torch.cuda.is_available():
-            return torch.cuda.memory_allocated()
-        # MPS and XPU don't expose per-tensor memory tracking
-        return 0
-
-    def _max_memory_allocated(self):
-        """Get peak accelerator memory usage in bytes, or 0 for unsupported backends."""
-        device_type = self.device if isinstance(self.device, str) else self.device.type
-        if device_type == "cuda" and torch.cuda.is_available():
-            return torch.cuda.max_memory_allocated()
-        return 0
-
     def _is_on_target_device(self, tensor, target_device):
         """Check if tensor is on the target device (handles cuda vs cuda:0 comparison)."""
         if tensor is None:
@@ -1270,13 +1184,6 @@ class AceStepHandler(LoraManagerMixin, ProgressMixin):
     def is_silence(self, audio):
         return torch.all(audio.abs() < 1e-6)
     
-    def _empty_cache(self) -> None:
-        """Clear device cache to reduce peak memory usage."""
-        if self.device.startswith("cuda") and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        elif self.device == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
-            torch.mps.empty_cache()
-
     def _get_system_memory_gb(self) -> Optional[float]:
         """Return total system RAM in GB when available."""
         try:
