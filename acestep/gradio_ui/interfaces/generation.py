@@ -380,27 +380,6 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                                 scale=1,
                             )
                     
-                    # Audio Normalization Settings
-                    with gr.Accordion(t("generation.advanced_dit_params"), open=False):
-                         with gr.Row():
-                            # Honor pre-initialized params for normalization
-                            enable_norm_val = init_params.get("enable_normalization", True) if service_pre_initialized else True
-                            norm_db_val = init_params.get("normalization_db", -1.0) if service_pre_initialized else -1.0
-                            
-                            enable_normalization = gr.Checkbox(
-                                label=t("gen.enable_normalization"), 
-                                value=enable_norm_val, 
-                                info=t("gen.enable_normalization_info")
-                            )
-                            normalization_db = gr.Slider(
-                                label=t("gen.normalization_db"), 
-                                minimum=-10.0, 
-                                maximum=0.0, 
-                                step=0.1, 
-                                value=norm_db_val, 
-                                info=t("gen.normalization_db_info")
-                            )
-                    
                     # Repainting controls
                     with gr.Group(visible=False) as repainting_group:
                         gr.HTML(f"<h5>{t('generation.repainting_controls')}</h5>")
@@ -534,6 +513,8 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                 # Optional Parameters
                 # In service mode: auto-expand
                 with gr.Accordion(t("generation.optional_params"), open=service_mode) as optional_params_accordion:
+                    # --- Music Properties ---
+                    gr.Markdown(f"#### {t('generation.optional_music_props')}")
                     with gr.Row():
                         bpm = gr.Number(
                             label=t("generation.bpm_label"),
@@ -554,6 +535,9 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                             allow_custom_value=True,
                             info=t("generation.timesig_info")
                         )
+                    # --- Generation Settings ---
+                    gr.Markdown(f"#### {t('generation.optional_gen_settings')}")
+                    with gr.Row():
                         audio_duration = gr.Number(
                             label=t("generation.duration_label"),
                             value=-1,
@@ -579,209 +563,258 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         else:
             _ui_config = get_ui_control_config(True)  # Default to turbo until model is loaded
         with gr.Accordion(t("generation.advanced_settings"), open=False):
-            with gr.Row():
-                inference_steps = gr.Slider(
-                    minimum=_ui_config["inference_steps_minimum"],
-                    maximum=_ui_config["inference_steps_maximum"],
-                    value=_ui_config["inference_steps_value"],
-                    step=1,
-                    label=t("generation.inference_steps_label"),
-                    info=t("generation.inference_steps_info")
-                )
-                guidance_scale = gr.Slider(
-                    minimum=1.0,
-                    maximum=15.0,
-                    value=7.0,
-                    step=0.1,
-                    label=t("generation.guidance_scale_label"),
-                    info=t("generation.guidance_scale_info"),
-                    visible=_ui_config["guidance_scale_visible"]
-                )
-                with gr.Column():
-                    seed = gr.Textbox(
-                        label=t("generation.seed_label"),
-                        value="-1",
-                        info=t("generation.seed_info")
+            
+            # ═══════════════════════════════════════════
+            # 🎛️ DiT Diffusion Parameters
+            # ═══════════════════════════════════════════
+            with gr.Accordion(t("generation.advanced_dit_section"), open=True):
+                with gr.Row():
+                    inference_steps = gr.Slider(
+                        minimum=_ui_config["inference_steps_minimum"],
+                        maximum=_ui_config["inference_steps_maximum"],
+                        value=_ui_config["inference_steps_value"],
+                        step=1,
+                        label=t("generation.inference_steps_label"),
+                        info=t("generation.inference_steps_info")
                     )
-                    random_seed_checkbox = gr.Checkbox(
-                        label=t("generation.random_seed_label"),
+                    guidance_scale = gr.Slider(
+                        minimum=1.0,
+                        maximum=15.0,
+                        value=7.0,
+                        step=0.1,
+                        label=t("generation.guidance_scale_label"),
+                        info=t("generation.guidance_scale_info"),
+                        visible=_ui_config["guidance_scale_visible"]
+                    )
+                    infer_method = gr.Dropdown(
+                        choices=["ode", "sde"],
+                        value="ode",
+                        label=t("generation.infer_method_label"),
+                        info=t("generation.infer_method_info"),
+                    )
+                with gr.Row():
+                    use_adg = gr.Checkbox(
+                        label=t("generation.use_adg_label"),
+                        value=False,
+                        info=t("generation.use_adg_info"),
+                        visible=_ui_config["use_adg_visible"]
+                    )
+                    shift = gr.Slider(
+                        minimum=1.0,
+                        maximum=5.0,
+                        value=_ui_config["shift_value"],
+                        step=0.1,
+                        label=t("generation.shift_label"),
+                        info=t("generation.shift_info"),
+                        visible=_ui_config["shift_visible"]
+                    )
+                    audio_cover_strength = gr.Slider(
+                        minimum=0.0,
+                        maximum=1.0,
+                        value=1.0,
+                        step=0.01,
+                        label=t("generation.codes_strength_label"),
+                        info=t("generation.codes_strength_info"),
+                        scale=1,
+                    )
+                with gr.Row():
+                    custom_timesteps = gr.Textbox(
+                        label=t("generation.custom_timesteps_label"),
+                        placeholder="0.97,0.76,0.615,0.5,0.395,0.28,0.18,0.085,0",
+                        value="",
+                        info=t("generation.custom_timesteps_info"),
+                    )
+                with gr.Row():
+                    cfg_interval_start = gr.Slider(
+                        minimum=0.0,
+                        maximum=1.0,
+                        value=0.0,
+                        step=0.01,
+                        label=t("generation.cfg_interval_start"),
+                        visible=_ui_config["cfg_interval_start_visible"]
+                    )
+                    cfg_interval_end = gr.Slider(
+                        minimum=0.0,
+                        maximum=1.0,
+                        value=1.0,
+                        step=0.01,
+                        label=t("generation.cfg_interval_end"),
+                        visible=_ui_config["cfg_interval_end_visible"]
+                    )
+                with gr.Row():
+                    with gr.Column():
+                        seed = gr.Textbox(
+                            label=t("generation.seed_label"),
+                            value="-1",
+                            info=t("generation.seed_info")
+                        )
+                        random_seed_checkbox = gr.Checkbox(
+                            label=t("generation.random_seed_label"),
+                            value=True,
+                            info=t("generation.random_seed_info")
+                        )
+            
+            # ═══════════════════════════════════════════
+            # 🤖 LM Generation Parameters
+            # ═══════════════════════════════════════════
+            with gr.Accordion(t("generation.advanced_lm_section"), open=False):
+                with gr.Row():
+                    lm_temperature = gr.Slider(
+                        label=t("generation.lm_temperature_label"),
+                        minimum=0.0,
+                        maximum=2.0,
+                        value=0.85,
+                        step=0.1,
+                        scale=1,
+                        info=t("generation.lm_temperature_info")
+                    )
+                    lm_cfg_scale = gr.Slider(
+                        label=t("generation.lm_cfg_scale_label"),
+                        minimum=1.0,
+                        maximum=3.0,
+                        value=2.0,
+                        step=0.1,
+                        scale=1,
+                        info=t("generation.lm_cfg_scale_info")
+                    )
+                with gr.Row():
+                    lm_top_k = gr.Slider(
+                        label=t("generation.lm_top_k_label"),
+                        minimum=0,
+                        maximum=100,
+                        value=0,
+                        step=1,
+                        scale=1,
+                        info=t("generation.lm_top_k_info")
+                    )
+                    lm_top_p = gr.Slider(
+                        label=t("generation.lm_top_p_label"),
+                        minimum=0.0,
+                        maximum=1.0,
+                        value=0.9,
+                        step=0.01,
+                        scale=1,
+                        info=t("generation.lm_top_p_info")
+                    )
+                with gr.Row():
+                    lm_negative_prompt = gr.Textbox(
+                        label=t("generation.lm_negative_prompt_label"),
+                        value="NO USER INPUT",
+                        placeholder=t("generation.lm_negative_prompt_placeholder"),
+                        info=t("generation.lm_negative_prompt_info"),
+                        lines=2,
+                    )
+                with gr.Row():
+                    use_cot_metas = gr.Checkbox(
+                        label=t("generation.cot_metas_label"),
                         value=True,
-                        info=t("generation.random_seed_info")
+                        info=t("generation.cot_metas_info"),
+                        scale=1,
                     )
-                audio_format = gr.Dropdown(
-                    choices=[("FLAC", "flac"), ("MP3", "mp3"), ("WAV (16-bit)", "wav"), ("WAV (32-bit Float)", "wav32")],
-                    value="flac",
-                    label=t("generation.audio_format_label"),
-                    info=t("generation.audio_format_info"),
-                    interactive=not service_mode  # Fixed in service mode
-                )
+                    use_cot_language = gr.Checkbox(
+                        label=t("generation.cot_language_label"),
+                        value=True,
+                        info=t("generation.cot_language_info"),
+                        scale=1,
+                    )
+                    constrained_decoding_debug = gr.Checkbox(
+                        label=t("generation.constrained_debug_label"),
+                        value=False,
+                        info=t("generation.constrained_debug_info"),
+                        scale=1,
+                        interactive=not service_mode  # Fixed in service mode
+                    )
             
-            with gr.Row():
-                use_adg = gr.Checkbox(
-                    label=t("generation.use_adg_label"),
-                    value=False,
-                    info=t("generation.use_adg_info"),
-                    visible=_ui_config["use_adg_visible"]
-                )
-                shift = gr.Slider(
-                    minimum=1.0,
-                    maximum=5.0,
-                    value=_ui_config["shift_value"],
-                    step=0.1,
-                    label=t("generation.shift_label"),
-                    info=t("generation.shift_info"),
-                    visible=_ui_config["shift_visible"]
-                )
-                infer_method = gr.Dropdown(
-                    choices=["ode", "sde"],
-                    value="ode",
-                    label=t("generation.infer_method_label"),
-                    info=t("generation.infer_method_info"),
-                )
+            # ═══════════════════════════════════════════
+            # 🔊 Audio Output & Post-processing
+            # ═══════════════════════════════════════════
+            with gr.Accordion(t("generation.advanced_output_section"), open=False):
+                with gr.Row():
+                    audio_format = gr.Dropdown(
+                        choices=[("FLAC", "flac"), ("MP3", "mp3"), ("WAV (16-bit)", "wav"), ("WAV (32-bit Float)", "wav32")],
+                        value="mp3",
+                        label=t("generation.audio_format_label"),
+                        info=t("generation.audio_format_info"),
+                        interactive=not service_mode  # Fixed in service mode
+                    )
+                    score_scale = gr.Slider(
+                        minimum=0.01,
+                        maximum=1.0,
+                        value=0.5,
+                        step=0.01,
+                        label=t("generation.score_sensitivity_label"),
+                        info=t("generation.score_sensitivity_info"),
+                        scale=1,
+                        visible=not service_mode  # Hidden in service mode
+                    )
+                with gr.Row():
+                    # Honor pre-initialized params for normalization
+                    enable_norm_val = init_params.get("enable_normalization", True) if service_pre_initialized else True
+                    norm_db_val = init_params.get("normalization_db", -1.0) if service_pre_initialized else -1.0
+                    
+                    enable_normalization = gr.Checkbox(
+                        label=t("gen.enable_normalization"), 
+                        value=enable_norm_val, 
+                        info=t("gen.enable_normalization_info")
+                    )
+                    normalization_db = gr.Slider(
+                        label=t("gen.normalization_db"), 
+                        minimum=-10.0, 
+                        maximum=0.0, 
+                        step=0.1, 
+                        value=norm_db_val, 
+                        info=t("gen.normalization_db_info")
+                    )
+                with gr.Row():
+                    latent_shift_val = init_params.get("latent_shift", 0.0) if service_pre_initialized else 0.0
+                    latent_rescale_val = init_params.get("latent_rescale", 1.0) if service_pre_initialized else 1.0
+                    
+                    latent_shift = gr.Slider(
+                        label=t("gen.latent_shift"),
+                        minimum=-0.2,
+                        maximum=0.2,
+                        step=0.01,
+                        value=latent_shift_val,
+                        info=t("gen.latent_shift_info")
+                    )
+                    latent_rescale = gr.Slider(
+                        label=t("gen.latent_rescale"),
+                        minimum=0.5,
+                        maximum=1.5,
+                        step=0.01,
+                        value=latent_rescale_val,
+                        info=t("gen.latent_rescale_info")
+                    )
             
-            with gr.Row():
-                custom_timesteps = gr.Textbox(
-                    label=t("generation.custom_timesteps_label"),
-                    placeholder="0.97,0.76,0.615,0.5,0.395,0.28,0.18,0.085,0",
-                    value="",
-                    info=t("generation.custom_timesteps_info"),
-                )
-            
-            with gr.Row():
-                cfg_interval_start = gr.Slider(
-                    minimum=0.0,
-                    maximum=1.0,
-                    value=0.0,
-                    step=0.01,
-                    label=t("generation.cfg_interval_start"),
-                    visible=_ui_config["cfg_interval_start_visible"]
-                )
-                cfg_interval_end = gr.Slider(
-                    minimum=0.0,
-                    maximum=1.0,
-                    value=1.0,
-                    step=0.01,
-                    label=t("generation.cfg_interval_end"),
-                    visible=_ui_config["cfg_interval_end_visible"]
-                )
-
-            # LM (Language Model) Parameters
-            gr.HTML(f"<h4>{t('generation.lm_params_title')}</h4>")
-            with gr.Row():
-                lm_temperature = gr.Slider(
-                    label=t("generation.lm_temperature_label"),
-                    minimum=0.0,
-                    maximum=2.0,
-                    value=0.85,
-                    step=0.1,
-                    scale=1,
-                    info=t("generation.lm_temperature_info")
-                )
-                lm_cfg_scale = gr.Slider(
-                    label=t("generation.lm_cfg_scale_label"),
-                    minimum=1.0,
-                    maximum=3.0,
-                    value=2.0,
-                    step=0.1,
-                    scale=1,
-                    info=t("generation.lm_cfg_scale_info")
-                )
-                lm_top_k = gr.Slider(
-                    label=t("generation.lm_top_k_label"),
-                    minimum=0,
-                    maximum=100,
-                    value=0,
-                    step=1,
-                    scale=1,
-                    info=t("generation.lm_top_k_info")
-                )
-                lm_top_p = gr.Slider(
-                    label=t("generation.lm_top_p_label"),
-                    minimum=0.0,
-                    maximum=1.0,
-                    value=0.9,
-                    step=0.01,
-                    scale=1,
-                    info=t("generation.lm_top_p_info")
-                )
-            
-            with gr.Row():
-                lm_negative_prompt = gr.Textbox(
-                    label=t("generation.lm_negative_prompt_label"),
-                    value="NO USER INPUT",
-                    placeholder=t("generation.lm_negative_prompt_placeholder"),
-                    info=t("generation.lm_negative_prompt_info"),
-                    lines=2,
-                    scale=2,
-                )
-            
-            with gr.Row():
-                use_cot_metas = gr.Checkbox(
-                    label=t("generation.cot_metas_label"),
-                    value=True,
-                    info=t("generation.cot_metas_info"),
-                    scale=1,
-                )
-                use_cot_language = gr.Checkbox(
-                    label=t("generation.cot_language_label"),
-                    value=True,
-                    info=t("generation.cot_language_info"),
-                    scale=1,
-                )
-                constrained_decoding_debug = gr.Checkbox(
-                    label=t("generation.constrained_debug_label"),
-                    value=False,
-                    info=t("generation.constrained_debug_info"),
-                    scale=1,
-                    interactive=not service_mode  # Fixed in service mode
-                )
-            
-            with gr.Row():
-                auto_score = gr.Checkbox(
-                    label=t("generation.auto_score_label"),
-                    value=False,
-                    info=t("generation.auto_score_info"),
-                    scale=1,
-                    interactive=not service_mode  # Fixed in service mode
-                )
-                auto_lrc = gr.Checkbox(
-                    label=t("generation.auto_lrc_label"),
-                    value=False,
-                    info=t("generation.auto_lrc_info"),
-                    scale=1,
-                    interactive=not service_mode  # Fixed in service mode
-                )
-                lm_batch_chunk_size = gr.Number(
-                    label=t("generation.lm_batch_chunk_label"),
-                    value=8,
-                    minimum=1,
-                    maximum=32,
-                    step=1,
-                    info=t("generation.lm_batch_chunk_info"),
-                    scale=1,
-                    interactive=not service_mode  # Fixed in service mode
-                )
-            
-            with gr.Row():
-                audio_cover_strength = gr.Slider(
-                    minimum=0.0,
-                    maximum=1.0,
-                    value=1.0,
-                    step=0.01,
-                    label=t("generation.codes_strength_label"),
-                    info=t("generation.codes_strength_info"),
-                    scale=1,
-                )
-                score_scale = gr.Slider(
-                    minimum=0.01,
-                    maximum=1.0,
-                    value=0.5,
-                    step=0.01,
-                    label=t("generation.score_sensitivity_label"),
-                    info=t("generation.score_sensitivity_info"),
-                    scale=1,
-                    visible=not service_mode  # Hidden in service mode
-                )
+            # ═══════════════════════════════════════════
+            # ⚡ Automation & Batch
+            # ═══════════════════════════════════════════
+            with gr.Accordion(t("generation.advanced_automation_section"), open=False):
+                with gr.Row():
+                    auto_score = gr.Checkbox(
+                        label=t("generation.auto_score_label"),
+                        value=False,
+                        info=t("generation.auto_score_info"),
+                        scale=1,
+                        interactive=not service_mode  # Fixed in service mode
+                    )
+                    auto_lrc = gr.Checkbox(
+                        label=t("generation.auto_lrc_label"),
+                        value=False,
+                        info=t("generation.auto_lrc_info"),
+                        scale=1,
+                        interactive=not service_mode  # Fixed in service mode
+                    )
+                    lm_batch_chunk_size = gr.Number(
+                        label=t("generation.lm_batch_chunk_label"),
+                        value=8,
+                        minimum=1,
+                        maximum=32,
+                        step=1,
+                        info=t("generation.lm_batch_chunk_info"),
+                        scale=1,
+                        interactive=not service_mode  # Fixed in service mode
+                    )
         
         # Set generate_btn to interactive if service is pre-initialized
         generate_btn_interactive = init_params.get('enable_generate', False) if service_pre_initialized else False
@@ -912,7 +945,10 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         # GPU info and tier override
         "gpu_info_display": gpu_info_display,
         "tier_dropdown": tier_dropdown,
-        # Normalization Controls (New)
+        # Normalization Controls
         "enable_normalization": enable_normalization,
         "normalization_db": normalization_db,
+        # Latent Shift / Rescale Controls
+        "latent_shift": latent_shift,
+        "latent_rescale": latent_rescale,
     }

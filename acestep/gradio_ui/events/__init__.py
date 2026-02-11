@@ -624,6 +624,8 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["complete_track_classes"],
             generation_section["enable_normalization"],
             generation_section["normalization_db"],
+            generation_section["latent_shift"],
+            generation_section["latent_rescale"],
             generation_section["autogen_checkbox"],
             results_section["current_batch_index"],
             results_section["total_batches"],
@@ -811,6 +813,10 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["lm_batch_chunk_size"],
             generation_section["track_name"],
             generation_section["complete_track_classes"],
+            generation_section["enable_normalization"],
+            generation_section["normalization_db"],
+            generation_section["latent_shift"],
+            generation_section["latent_rescale"],
         ],
         outputs=[results_section["generation_params_state"]]
     ).then(
@@ -918,6 +924,10 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["allow_lm_batch"],
             generation_section["track_name"],
             generation_section["complete_track_classes"],
+            generation_section["enable_normalization"],
+            generation_section["normalization_db"],
+            generation_section["latent_shift"],
+            generation_section["latent_rescale"],
         ]
     )
     

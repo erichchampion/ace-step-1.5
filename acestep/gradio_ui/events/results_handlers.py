@@ -439,6 +439,8 @@ def generate_with_progress(
     lm_batch_chunk_size,
     enable_normalization,
     normalization_db,
+    latent_shift,
+    latent_rescale,
     progress=gr.Progress(track_tqdm=True),
 ):
 
@@ -524,6 +526,8 @@ def generate_with_progress(
         use_constrained_decoding=True,
         enable_normalization=enable_normalization,
         normalization_db=normalization_db,
+        latent_shift=latent_shift,
+        latent_rescale=latent_rescale,
     )
 
     # seed string to list
@@ -889,7 +893,7 @@ def generate_with_progress(
     for idx in range(8):
         path = audio_outputs[idx]
         if path:
-            audio_playback_updates.append(gr.update(value=path, label=f"Sample {idx+1} (Ready)", interactive=True))
+            audio_playback_updates.append(gr.update(value=path, label=f"Sample {idx+1} (Ready)", interactive=False))
             logger.info(f"[generate_with_progress] Audio {idx+1} path: {path}")
         else:
             audio_playback_updates.append(gr.update(value=None, label="None", interactive=False))
@@ -1385,7 +1389,8 @@ def capture_current_params(
     constrained_decoding_debug, allow_lm_batch, auto_score, auto_lrc, score_scale, lm_batch_chunk_size,
 
     track_name, complete_track_classes,
-    enable_normalization, normalization_db
+    enable_normalization, normalization_db,
+    latent_shift, latent_rescale
 ):
 
     """Capture current UI parameters for next batch generation
@@ -1442,6 +1447,8 @@ def capture_current_params(
 
         "enable_normalization": enable_normalization,
         "normalization_db": normalization_db,
+        "latent_shift": latent_shift,
+        "latent_rescale": latent_rescale,
     }
 
 
@@ -1467,6 +1474,8 @@ def generate_with_batch_management(
 
     enable_normalization,
     normalization_db,
+    latent_shift,
+    latent_rescale,
     autogen_checkbox,
 
     current_batch_index,
@@ -1498,6 +1507,8 @@ def generate_with_batch_management(
 
         enable_normalization,
         normalization_db,
+        latent_shift,
+        latent_rescale,
         progress
     )
 
@@ -1595,6 +1606,8 @@ def generate_with_batch_management(
 
         "enable_normalization": enable_normalization,
         "normalization_db": normalization_db,
+        "latent_shift": latent_shift,
+        "latent_rescale": latent_rescale,
     }
 
     
@@ -1777,6 +1790,10 @@ def generate_next_batch_background(
         params.setdefault("lm_batch_chunk_size", 8)
         params.setdefault("track_name", None)
         params.setdefault("complete_track_classes", [])
+        params.setdefault("enable_normalization", True)
+        params.setdefault("normalization_db", -1.0)
+        params.setdefault("latent_shift", 0.0)
+        params.setdefault("latent_rescale", 1.0)
         
         # Call generate_with_progress with the saved parameters
         # Note: generate_with_progress is a generator, need to iterate through it
@@ -1828,6 +1845,10 @@ def generate_next_batch_background(
             auto_lrc=params.get("auto_lrc"),
             score_scale=params.get("score_scale"),
             lm_batch_chunk_size=params.get("lm_batch_chunk_size"),
+            enable_normalization=params.get("enable_normalization"),
+            normalization_db=params.get("normalization_db"),
+            latent_shift=params.get("latent_shift", 0.0),
+            latent_rescale=params.get("latent_rescale", 1.0),
             progress=progress
         )
         
@@ -2240,6 +2261,10 @@ def restore_batch_parameters(current_batch_index, batch_queue):
     enable_normalization = params.get("enable_normalization", True)
     normalization_db = params.get("normalization_db", -1.0)
 
+    # Latent Shift / Rescale
+    latent_shift = params.get("latent_shift", 0.0)
+    latent_rescale = params.get("latent_rescale", 1.0)
+
     
     # Extract codes - only restore to single input
     stored_codes = batch_data.get("codes", "")
@@ -2261,6 +2286,7 @@ def restore_batch_parameters(current_batch_index, batch_queue):
         lm_temperature, lm_cfg_scale, lm_top_k, lm_top_p, think_checkbox,
         use_cot_caption, use_cot_language, allow_lm_batch,
         track_name, complete_track_classes,
-        enable_normalization, normalization_db
+        enable_normalization, normalization_db,
+        latent_shift, latent_rescale
     )
 
