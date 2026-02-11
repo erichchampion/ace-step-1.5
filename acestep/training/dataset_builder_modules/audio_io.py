@@ -5,25 +5,43 @@ import torchaudio
 from loguru import logger
 
 
-def load_lyrics_file(audio_path: str) -> Tuple[str, bool]:
-    """Load lyrics from a .txt file with the same name as the audio file."""
+def _read_text_file(path: str) -> Tuple[str, bool]:
+    """Read a text file; return (content.strip(), True) if present and non-empty."""
+    if not os.path.exists(path):
+        return "", False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            return content, True
+        return "", False
+    except Exception as e:
+        logger.warning(f"Failed to read {path}: {e}")
+        return "", False
+
+
+def load_caption_file(audio_path: str) -> Tuple[str, bool]:
+    """Load caption from <basename>.caption.txt (explicit convention)."""
     base_path = os.path.splitext(audio_path)[0]
-    lyrics_path = base_path + ".txt"
+    caption_path = base_path + ".caption.txt"
+    content, ok = _read_text_file(caption_path)
+    if ok:
+        logger.debug(f"Loaded caption from {caption_path}")
+    return content, ok
 
-    if os.path.exists(lyrics_path):
-        try:
-            with open(lyrics_path, "r", encoding="utf-8") as f:
-                lyrics_content = f.read().strip()
 
-            if lyrics_content:
-                logger.info(f"Loaded lyrics from {lyrics_path}")
-                return lyrics_content, True
-            logger.warning(f"Lyrics file is empty: {lyrics_path}")
-            return "", False
-        except Exception as e:
-            logger.warning(f"Failed to read lyrics file {lyrics_path}: {e}")
-            return "", False
-
+def load_lyrics_file(audio_path: str) -> Tuple[str, bool]:
+    """Load lyrics from <basename>.lyrics.txt, then fallback to <basename>.txt for backward compat."""
+    base_path = os.path.splitext(audio_path)[0]
+    for suffix in (".lyrics.txt", ".txt"):
+        path = base_path + suffix
+        content, ok = _read_text_file(path)
+        if ok:
+            if suffix == ".lyrics.txt":
+                logger.debug(f"Loaded lyrics from {path}")
+            else:
+                logger.debug(f"Loaded lyrics from {path} (legacy .txt)")
+            return content, True
     return "", False
 
 
