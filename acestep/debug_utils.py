@@ -19,6 +19,25 @@ from acestep.constants import (
     DEBUG_GPU,
 )
 
+import os
+import torch
+
+def _configure_cpu_threads() -> None:
+    """Set torch's intra‑op thread count based on available CPUs."""
+    try:
+        cpu_cnt = os.cpu_count() or 1
+        # Ensure we never set a non‑positive number of threads.
+        threads = cpu_cnt - 2 if cpu_cnt > 2 else cpu_cnt
+        threads = max(threads, 1)
+        torch.set_num_threads(threads)
+        # Also set the number of inter‑op threads for completeness.
+        torch.set_num_interop_threads(threads)
+    except Exception as exc:
+        pass
+
+# Apply the configuration immediately upon import.
+_configure_cpu_threads()
+
 
 def _normalize_mode(mode: str) -> str:
     return (mode or "").strip().upper()
