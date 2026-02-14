@@ -48,6 +48,12 @@ class _DummyHandler:
         self.use_lora = False
         self.lora_scale = 1.0
         self._lora_active_adapter = None
+        self._lora_service = SimpleNamespace(
+            registry={},
+            scale_state={},
+            active_adapter=None,
+            last_scale_report={},
+        )
 
     def _ensure_lora_registry(self):
         """Satisfy lifecycle hook without side effects."""
@@ -150,6 +156,45 @@ class LifecycleTests(unittest.TestCase):
         base_net.apply_to.assert_called_once_with()
         base_net.load_weights.assert_called_once_with("weights.safetensors")
         self.assertIs(decoder._lycoris_net, base_net)
+
+    def test_unload_lora_restores_lokr_adapter_before_state_restore(self):
+        """Unload should call LyCORIS restore() and then restore decoder weights."""
+        handler = _DummyHandler()
+        handler.lora_loaded = True
+        handler._base_decoder = {"w": torch.ones(1)}
+        events = []
+
+        lycoris_net = SimpleNamespace(restore=Mock(side_effect=lambda: events.append("restore")))
+        handler.model.decoder._lycoris_net = lycoris_net
+        handler.model.decoder.load_state_dict = Mock(
+            side_effect=lambda *_args, **_kwargs: events.append("load_state_dict") or SimpleNamespace(
+                missing_keys=[], unexpected_keys=[]
+            )
+        )
+
+        message = lifecycle.unload_lora(handler)
+
+        self.assertEqual(message, "✅ LoRA unloaded, using base model")
+        self.assertEqual(events, ["restore", "load_state_dict"])
+        self.assertIsNone(handler.model.decoder._lycoris_net)
+        self.assertFalse(handler.lora_loaded)
+        self.assertFalse(handler.use_lora)
+
+    def test_unload_lora_fails_when_lokr_restore_raises(self):
+        """Unload should fail fast if LyCORIS restore() raises an exception."""
+        handler = _DummyHandler()
+        handler.lora_loaded = True
+        handler._base_decoder = {"w": torch.ones(1)}
+        handler.model.decoder._lycoris_net = SimpleNamespace(restore=Mock(side_effect=RuntimeError("restore failed")))
+        handler.model.decoder.load_state_dict = Mock(
+            return_value=SimpleNamespace(missing_keys=[], unexpected_keys=[])
+        )
+
+        message = lifecycle.unload_lora(handler)
+
+        self.assertIn("❌ Failed to unload LoRA", message)
+        self.assertIn("restore failed", message)
+        handler.model.decoder.load_state_dict.assert_not_called()
 
 
 if __name__ == "__main__":

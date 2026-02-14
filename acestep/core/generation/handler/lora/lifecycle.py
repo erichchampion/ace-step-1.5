@@ -242,12 +242,26 @@ def unload_lora(self) -> str:
         if hasattr(self, '_memory_allocated'):
             mem_before = self._memory_allocated() / (1024**3)
             logger.info(f"VRAM before LoRA unload: {mem_before:.2f}GB")
-        
-        # Get the base model from the PEFT wrapper if it exists
-        # This is more memory-efficient than recreating from state_dict
-        from peft import PeftModel
-        
-        if isinstance(self.model.decoder, PeftModel):
+
+        # If this decoder has an attached LyCORIS net, restore original module graph first.
+        lycoris_net = getattr(self.model.decoder, "_lycoris_net", None)
+        if lycoris_net is not None:
+            restore_fn = getattr(lycoris_net, "restore", None)
+            if callable(restore_fn):
+                logger.info("Restoring decoder structure from LyCORIS adapter")
+                restore_fn()
+            else:
+                logger.warning("Decoder has _lycoris_net but no restore() method; continuing with state_dict restore")
+            self.model.decoder._lycoris_net = None
+
+        # Get the base model from the PEFT wrapper if it exists.
+        # This is more memory-efficient than recreating from state_dict.
+        try:
+            from peft import PeftModel
+        except ImportError:
+            PeftModel = None  # type: ignore[assignment]
+
+        if PeftModel is not None and isinstance(self.model.decoder, PeftModel):
             logger.info("Extracting base model from PEFT wrapper")
             # PEFT's get_base_model() returns the underlying base model without copying
             self.model.decoder = self.model.decoder.get_base_model()
