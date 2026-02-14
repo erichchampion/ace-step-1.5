@@ -593,6 +593,9 @@ def create_generation_tab_section(dit_handler, llm_handler, init_params=None, la
         simple_sample_created = gr.State(value=False)
         # State to store lyrics before checking Instrumental (for restore on uncheck)
         lyrics_before_instrumental = gr.State(value="")
+        # Track previous generation mode so we can clean up polluted values
+        # when switching away from Extract/Lego.
+        previous_generation_mode = gr.State(value="Custom")
 
         # --- Source Audio Row (for remix/repaint/extract/lego/complete — hidden in Simple/Custom) ---
         with gr.Row(equal_height=True, visible=False) as src_audio_row:
@@ -607,6 +610,22 @@ def create_generation_tab_section(dit_handler, llm_handler, init_params=None, la
                     variant="secondary",
                     size="lg",
                 )
+
+        # --- Track selectors (for extract/lego/complete, base model only) ---
+        # Placed immediately below source audio for logical grouping
+        track_name = gr.Dropdown(
+            choices=TRACK_NAMES,
+            value=None,
+            label=t("generation.track_name_label"),
+            info=t("generation.track_name_info"), elem_classes=["has-info-container"],
+            visible=False,
+        )
+        complete_track_classes = gr.CheckboxGroup(
+            choices=TRACK_NAMES,
+            label=t("generation.track_classes_label"),
+            info=t("generation.track_classes_info"), elem_classes=["has-info-container"],
+            visible=False,
+        )
 
         # --- LM Codes Hints (only visible in Custom mode, collapsed by default) ---
         with gr.Accordion(t("generation.lm_codes_hints"), open=False, visible=True, elem_classes=["has-info-container"]) as text2music_audio_codes_group:
@@ -696,24 +715,9 @@ def create_generation_tab_section(dit_handler, llm_handler, init_params=None, la
                 with gr.Column(scale=1, min_width=80, elem_classes="icon-btn-wrap"):
                     sample_btn = gr.Button(t("generation.sample_btn"), variant="primary", size="lg")
 
-        # --- Track selectors (for extract/lego/complete, base model only) ---
-        track_name = gr.Dropdown(
-            choices=TRACK_NAMES,
-            value=None,
-            label=t("generation.track_name_label"),
-            info=t("generation.track_name_info"), elem_classes=["has-info-container"],
-            visible=False,
-        )
-        complete_track_classes = gr.CheckboxGroup(
-            choices=TRACK_NAMES,
-            label=t("generation.track_classes_label"),
-            info=t("generation.track_classes_info"), elem_classes=["has-info-container"],
-            visible=False,
-        )
-
-        # --- Repainting controls ---
+        # --- Repainting controls (also used for Lego stem area) ---
         with gr.Group(visible=False) as repainting_group:
-            gr.HTML(f"<h5>{t('generation.repainting_controls')}</h5>")
+            repainting_header_html = gr.HTML(f"<h5>{t('generation.repainting_controls')}</h5>")
             with gr.Row():
                 repainting_start = gr.Number(label=t("generation.repainting_start"), value=0.0, step=0.1)
                 repainting_end = gr.Number(label=t("generation.repainting_end"), value=-1, minimum=-1, step=0.1)
@@ -781,6 +785,7 @@ def create_generation_tab_section(dit_handler, llm_handler, init_params=None, la
         "track_name": track_name,
         "complete_track_classes": complete_track_classes,
         "repainting_group": repainting_group,
+        "repainting_header_html": repainting_header_html,
         "repainting_start": repainting_start,
         "repainting_end": repainting_end,
         "simple_mode_group": simple_mode_group,
@@ -791,6 +796,7 @@ def create_generation_tab_section(dit_handler, llm_handler, init_params=None, la
         "create_sample_btn": create_sample_btn,
         "simple_sample_created": simple_sample_created,
         "lyrics_before_instrumental": lyrics_before_instrumental,
+        "previous_generation_mode": previous_generation_mode,
         "custom_mode_group": custom_mode_group,
         "captions": captions,
         "sample_btn": sample_btn,

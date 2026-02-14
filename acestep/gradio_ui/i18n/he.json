@@ -202,6 +202,10 @@
     "parallel_thinking_info": "עיבוד מקבילי של דגימות אצווה ליצירה מהירה.",
     "generate_btn": "🎵 צור מוזיקה",
     "extract_stem_btn": "🎵 חילוץ סטם",
+    "add_stem_btn": "🎵 הוספת סטם",
+    "stem_area_controls": "🧩 אזור סטם חדש (בשניות)",
+    "stem_start": "תחילת סטם",
+    "stem_end": "סיום סטם",
     "autogen_label": "יצירה אוטומטית",
     "caption_rewrite_label": "שכתוב תיאור",
     "caption_rewrite_info": "שימוש ב-LM לשכתוב תיאור לפני יצירה."
