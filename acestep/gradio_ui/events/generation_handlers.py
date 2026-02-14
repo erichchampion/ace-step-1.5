@@ -754,6 +754,7 @@ def get_model_type_ui_settings(is_turbo: bool, current_mode: str = None, is_pure
     - cfg_interval_end
     - task_type (hidden, keep value)
     - generation_mode (update choices, preserve current value)
+    - init_llm_checkbox (unchecked for pure base models)
     """
     cfg = get_ui_control_config(is_turbo, is_pure_base=is_pure_base)
     new_choices = cfg["generation_mode_choices"]
@@ -762,6 +763,9 @@ def get_model_type_ui_settings(is_turbo: bool, current_mode: str = None, is_pure
         mode_update = gr.update(choices=new_choices, value=current_mode)
     else:
         mode_update = gr.update(choices=new_choices)
+    # Pure base models default to LM not initialized (base extract/lego/complete
+    # workflows don't need LM).  Non-base models keep the checkbox unchanged.
+    init_llm_update = gr.update(value=False) if is_pure_base else gr.update()
     return (
         gr.update(
             value=cfg["inference_steps_value"],
@@ -775,6 +779,7 @@ def get_model_type_ui_settings(is_turbo: bool, current_mode: str = None, is_pure
         gr.update(visible=cfg["cfg_interval_end_visible"]),
         gr.update(),  # task_type - no change (hidden, managed by mode)
         mode_update,  # generation_mode choices (with preserved value)
+        init_llm_update,  # init_llm_checkbox (unchecked for pure base)
     )
 
 
@@ -1092,8 +1097,12 @@ def compute_mode_ui_updates(mode: str, llm_handler=None):
         llm_handler: Optional LLM handler (used for think-checkbox state).
 
     Returns:
-        Tuple of 19 gr.update objects matching the standard mode-change
+        Tuple of 30 gr.update objects matching the standard mode-change
         output list (see event wiring in events/__init__.py).
+        Indices 0-18: original outputs.
+        Indices 19-29: new Extract-mode outputs (captions, lyrics, bpm,
+        key_scale, time_signature, vocal_language, audio_duration,
+        auto_score, autogen_checkbox, auto_lrc, analyze_btn).
     """
     task_type = MODE_TO_TASK_TYPE.get(mode, "text2music")
 
@@ -1108,18 +1117,18 @@ def compute_mode_ui_updates(mode: str, llm_handler=None):
 
     # --- Visibility rules ---
     show_simple = is_simple
-    show_custom_group = not_simple
+    show_custom_group = not_simple and not is_extract
     show_generate_row = not_simple
     generate_interactive = not_simple
     show_src_audio = is_cover or is_repaint or is_extract or is_lego or is_complete
-    show_optional = not_simple
+    show_optional = not_simple and not is_extract
     show_repainting = is_repaint or is_lego
     show_audio_codes = is_custom
     show_track_name = is_lego or is_extract
     show_complete_classes = is_complete
 
-    # Audio cover strength: visible in Custom, Remix, Extract, Lego, Complete
-    show_strength = not is_simple and not is_repaint
+    # Audio cover strength: visible in Custom, Remix, Lego, Complete (NOT Extract)
+    show_strength = not is_simple and not is_repaint and not is_extract
     if is_cover:
         strength_label = t("generation.remix_strength_label")
         strength_info = t("generation.remix_strength_info")
@@ -1135,14 +1144,14 @@ def compute_mode_ui_updates(mode: str, llm_handler=None):
 
     cover_noise_update = gr.update(visible=is_cover)
 
-    # Think checkbox
+    # Think checkbox: hidden in Extract mode
     lm_initialized = llm_handler.llm_initialized if llm_handler else False
-    if is_cover or is_repaint:
-        think_update = gr.update(interactive=False, value=False)
+    if is_extract or is_cover or is_repaint:
+        think_update = gr.update(interactive=False, value=False, visible=not is_extract)
     elif not lm_initialized:
-        think_update = gr.update(interactive=False, value=False)
+        think_update = gr.update(interactive=False, value=False, visible=True)
     else:
-        think_update = gr.update(interactive=True)
+        think_update = gr.update(interactive=True, visible=True)
 
     mode_descriptions = {
         "Simple": t("generation.mode_info_simple"),
@@ -1157,26 +1166,79 @@ def compute_mode_ui_updates(mode: str, llm_handler=None):
 
     show_results = not_simple
 
+    # Generate button label: "Extract Stem" for Extract mode
+    if is_extract:
+        generate_btn_update = gr.update(
+            interactive=generate_interactive,
+            value=t("generation.extract_stem_btn"),
+        )
+    else:
+        generate_btn_update = gr.update(
+            interactive=generate_interactive,
+            value=t("generation.generate_btn"),
+        )
+
+    # --- New outputs for Extract mode (indices 19-29) ---
+    if is_extract:
+        # Reset and hide caption/lyrics/metadata fields
+        captions_update = gr.update(value="", visible=False)
+        lyrics_update = gr.update(value="", visible=False)
+        bpm_update = gr.update(value=None, interactive=False, visible=False)
+        key_scale_update = gr.update(value="", interactive=False, visible=False)
+        time_signature_update = gr.update(value="", interactive=False, visible=False)
+        vocal_language_update = gr.update(value="unknown", interactive=False, visible=False)
+        audio_duration_update = gr.update(value=-1, interactive=False, visible=False)
+        # Hide auto_score, autogen, auto_lrc, analyze_btn; disable interaction
+        auto_score_update = gr.update(visible=False, value=False, interactive=False)
+        autogen_update = gr.update(visible=False, value=False, interactive=False)
+        auto_lrc_update = gr.update(visible=False, value=False, interactive=False)
+        analyze_btn_update = gr.update(visible=False)
+    else:
+        # Non-Extract: use gr.skip() to leave these unchanged
+        captions_update = gr.update(visible=True)
+        lyrics_update = gr.update(visible=True)
+        bpm_update = gr.update(interactive=True, visible=True)
+        key_scale_update = gr.update(interactive=True, visible=True)
+        time_signature_update = gr.update(interactive=True, visible=True)
+        vocal_language_update = gr.update(interactive=True, visible=True)
+        audio_duration_update = gr.update(interactive=True, visible=True)
+        auto_score_update = gr.update(visible=True, interactive=True)
+        autogen_update = gr.update(visible=True, interactive=True)
+        auto_lrc_update = gr.update(visible=True, interactive=True)
+        analyze_btn_update = gr.update(visible=True)
+
     return (
-        gr.update(visible=show_simple),              # simple_mode_group
-        gr.update(visible=show_custom_group),         # custom_mode_group
-        gr.update(interactive=generate_interactive),   # generate_btn
-        False,                                         # simple_sample_created
-        gr.Accordion(visible=show_optional, open=False),  # optional_params_accordion
-        gr.update(value=task_type, elem_classes=["has-info-container"]), # task_type
-        gr.update(visible=show_src_audio),             # src_audio_row
-        gr.update(visible=show_repainting),            # repainting_group
-        gr.update(visible=show_audio_codes),           # text2music_audio_codes_group
-        gr.update(visible=show_track_name),            # track_name
-        gr.update(visible=show_complete_classes),       # complete_track_classes
-        gr.update(visible=show_generate_row),          # generate_btn_row
-        gr.update(info=mode_help_text, elem_classes=["has-info-container"]), # generation_mode (info -> help)
-        gr.update(visible=show_results),               # results_wrapper
-        think_update,                                  # think_checkbox
-        gr.update(visible=not_simple),                 # load_file_col
-        gr.update(visible=not_simple),                 # load_file
-        strength_update,                               # audio_cover_strength
-        cover_noise_update,                            # cover_noise_strength
+        gr.update(visible=show_simple),              # 0: simple_mode_group
+        gr.update(visible=show_custom_group),         # 1: custom_mode_group
+        generate_btn_update,                           # 2: generate_btn
+        False,                                         # 3: simple_sample_created
+        gr.Accordion(visible=show_optional, open=False),  # 4: optional_params_accordion
+        gr.update(value=task_type, elem_classes=["has-info-container"]), # 5: task_type
+        gr.update(visible=show_src_audio),             # 6: src_audio_row
+        gr.update(visible=show_repainting),            # 7: repainting_group
+        gr.update(visible=show_audio_codes),           # 8: text2music_audio_codes_group
+        gr.update(visible=show_track_name),            # 9: track_name
+        gr.update(visible=show_complete_classes),       # 10: complete_track_classes
+        gr.update(visible=show_generate_row),          # 11: generate_btn_row
+        gr.update(info=mode_help_text, elem_classes=["has-info-container"]), # 12: generation_mode
+        gr.update(visible=show_results),               # 13: results_wrapper
+        think_update,                                  # 14: think_checkbox
+        gr.update(visible=not_simple),                 # 15: load_file_col
+        gr.update(visible=not_simple),                 # 16: load_file
+        strength_update,                               # 17: audio_cover_strength
+        cover_noise_update,                            # 18: cover_noise_strength
+        # --- New Extract-mode outputs (19-29) ---
+        captions_update,                               # 19: captions
+        lyrics_update,                                 # 20: lyrics
+        bpm_update,                                    # 21: bpm
+        key_scale_update,                              # 22: key_scale
+        time_signature_update,                         # 23: time_signature
+        vocal_language_update,                         # 24: vocal_language
+        audio_duration_update,                         # 25: audio_duration
+        auto_score_update,                             # 26: auto_score
+        autogen_update,                                # 27: autogen_checkbox
+        auto_lrc_update,                               # 28: auto_lrc
+        analyze_btn_update,                            # 29: analyze_btn
     )
 
 
@@ -1187,9 +1249,46 @@ def handle_generation_mode_change(mode: str, llm_handler=None):
     "Extract", "Lego", "Complete".
     
     Returns:
-        Tuple of 19 updates for UI components (see output list in event wiring).
+        Tuple of 30 updates for UI components (see output list in event wiring).
     """
     return compute_mode_ui_updates(mode, llm_handler)
+
+
+def handle_extract_track_name_change(track_name_value: str, mode: str):
+    """Auto-fill caption with track name when in Extract mode.
+    
+    Args:
+        track_name_value: Selected track name (e.g., "vocals", "drums").
+        mode: Current generation mode.
+    
+    Returns:
+        gr.update for captions component.
+    """
+    if mode == "Extract" and track_name_value:
+        return gr.update(value=track_name_value)
+    return gr.update()
+
+
+def handle_extract_src_audio_change(src_audio_path, mode: str):
+    """Auto-fill audio_duration from source audio file when in Extract mode.
+    
+    Args:
+        src_audio_path: Path to the uploaded source audio file.
+        mode: Current generation mode.
+    
+    Returns:
+        gr.update for audio_duration component.
+    """
+    if mode != "Extract" or not src_audio_path:
+        return gr.update()
+    try:
+        from acestep.training.dataset_builder_modules.audio_io import get_audio_duration
+        duration = get_audio_duration(src_audio_path)
+        if duration and duration > 0:
+            return gr.update(value=float(duration))
+    except Exception as e:
+        logger.warning(f"Failed to get audio duration for extract mode: {e}")
+    return gr.update()
 
 
 def get_generation_mode_choices(is_pure_base: bool = False) -> list:

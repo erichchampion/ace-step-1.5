@@ -202,6 +202,7 @@
     "parallel_thinking_label": "ParallelThinking",
     "parallel_thinking_info": "Process batch samples in parallel for faster generation.",
     "generate_btn": "🎵 Generate Music",
+    "extract_stem_btn": "🎵 Extract Stem",
     "autogen_label": "AutoGen",
     "caption_rewrite_label": "CaptionRewrite",
     "caption_rewrite_info": "Use LM to rewrite caption before generation."

@@ -41,6 +41,7 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["cfg_interval_end"],
             generation_section["task_type"],
             generation_section["generation_mode"],
+            generation_section["init_llm_checkbox"],
         ]
     )
     
@@ -92,6 +93,7 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["cfg_interval_end"],
             generation_section["task_type"],
             generation_section["generation_mode"],
+            generation_section["init_llm_checkbox"],
             # GPU-config-aware limits (updated after initialization)
             generation_section["audio_duration"],
             generation_section["batch_size_input"],
@@ -353,7 +355,39 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["load_file"],
             generation_section["audio_cover_strength"],
             generation_section["cover_noise_strength"],
+            # New Extract-mode outputs (indices 19-29)
+            generation_section["captions"],
+            generation_section["lyrics"],
+            generation_section["bpm"],
+            generation_section["key_scale"],
+            generation_section["time_signature"],
+            generation_section["vocal_language"],
+            generation_section["audio_duration"],
+            generation_section["auto_score"],
+            generation_section["autogen_checkbox"],
+            generation_section["auto_lrc"],
+            generation_section["analyze_btn"],
         ]
+    )
+    
+    # ========== Extract Mode: Auto-fill caption from track_name ==========
+    generation_section["track_name"].change(
+        fn=gen_h.handle_extract_track_name_change,
+        inputs=[
+            generation_section["track_name"],
+            generation_section["generation_mode"],
+        ],
+        outputs=[generation_section["captions"]],
+    )
+    
+    # ========== Extract Mode: Auto-fill audio_duration from src_audio ==========
+    generation_section["src_audio"].change(
+        fn=gen_h.handle_extract_src_audio_change,
+        inputs=[
+            generation_section["src_audio"],
+            generation_section["generation_mode"],
+        ],
+        outputs=[generation_section["audio_duration"]],
     )
     
     # ========== Simple Mode Instrumental Checkbox ==========
@@ -556,6 +590,18 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
         generation_section["load_file"],
         generation_section["audio_cover_strength"],
         generation_section["cover_noise_strength"],
+        # New Extract-mode outputs (indices 19-29)
+        generation_section["captions"],
+        generation_section["lyrics"],
+        generation_section["bpm"],
+        generation_section["key_scale"],
+        generation_section["time_signature"],
+        generation_section["vocal_language"],
+        generation_section["audio_duration"],
+        generation_section["auto_score"],
+        generation_section["autogen_checkbox"],
+        generation_section["auto_lrc"],
+        generation_section["analyze_btn"],
     ]
     for btn_idx in range(1, 9):
         results_section[f"send_to_remix_btn_{btn_idx}"].click(

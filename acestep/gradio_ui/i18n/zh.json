@@ -203,6 +203,7 @@
     "parallel_thinking_label": "并行思考",
     "parallel_thinking_info": "并行处理批量样本以加速生成。",
     "generate_btn": "🎵 生成音乐",
+    "extract_stem_btn": "🎵 提取分轨",
     "autogen_label": "自动生成",
     "caption_rewrite_label": "描述重写",
     "caption_rewrite_info": "生成前使用LM重写描述。",

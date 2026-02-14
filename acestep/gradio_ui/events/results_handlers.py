@@ -462,10 +462,10 @@ def send_audio_to_remix(audio_file, lm_metadata, current_lyrics, current_caption
     
     Returns:
         Tuple of (src_audio, generation_mode, lyrics, caption,
-                  *mode_ui_updates)  — 4 + 19 = 23 values.
+                  *mode_ui_updates)  — 4 + 30 = 34 values.
     """
-    # 4 data outputs + 19 mode-UI outputs
-    n_outputs = 23
+    # 4 data outputs + 30 mode-UI outputs
+    n_outputs = 34
     if audio_file is None:
         return (gr.skip(),) * n_outputs
     
@@ -480,7 +480,7 @@ def send_audio_to_remix(audio_file, lm_metadata, current_lyrics, current_caption
         gr.update(value="Remix"),         # generation_mode -> Remix
         lyrics,                           # lyrics
         caption,                          # caption
-        *mode_updates,                    # 19 mode-UI updates
+        *mode_updates,                    # 30 mode-UI updates
     )
 
 
@@ -501,9 +501,9 @@ def send_audio_to_repaint(audio_file, lm_metadata, current_lyrics, current_capti
     
     Returns:
         Tuple of (src_audio, generation_mode, lyrics, caption,
-                  *mode_ui_updates)  — 4 + 19 = 23 values.
+                  *mode_ui_updates)  — 4 + 30 = 34 values.
     """
-    n_outputs = 23
+    n_outputs = 34
     if audio_file is None:
         return (gr.skip(),) * n_outputs
     
@@ -518,7 +518,7 @@ def send_audio_to_repaint(audio_file, lm_metadata, current_lyrics, current_capti
         gr.update(value="Repaint"),       # generation_mode -> Repaint
         lyrics,                           # lyrics
         caption,                          # caption
-        *mode_updates,                    # 19 mode-UI updates
+        *mode_updates,                    # 30 mode-UI updates
     )
 
 
