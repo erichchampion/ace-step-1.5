@@ -2,14 +2,9 @@
 Gradio UI Event Handlers Module
 Main entry point for setting up all event handlers
 """
-import gradio as gr
-from typing import Optional
-from loguru import logger
-
 # Import handler modules
 from . import generation_handlers as gen_h
 from . import results_handlers as res_h
-from . import training_handlers as train_h
 from .wiring import (
     GenerationWiringContext,
     TrainingWiringContext,
@@ -20,8 +15,11 @@ from .wiring import (
     register_generation_run_handlers,
     register_results_aux_handlers,
     register_generation_service_handlers,
+    register_training_dataset_builder_handlers,
+    register_training_dataset_load_handler,
+    register_training_preprocess_handler,
+    register_training_run_handlers,
 )
-from acestep.ui.gradio.i18n import t
 
 
 def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, dataset_section, generation_section, results_section):
@@ -280,429 +278,30 @@ def setup_training_event_handlers(demo, dit_handler, llm_handler, training_secti
         llm_handler=llm_handler,
         training_section=training_section,
     )
-    training_section = training_context.training_section
     
     # ========== Load Existing Dataset (Top Section) ==========
 
     # Load existing dataset JSON at the top of Dataset Builder
-    training_section["load_json_btn"].click(
-        fn=train_h.load_existing_dataset_for_preprocess,
-        inputs=[
-            training_section["load_json_path"],
-            training_section["dataset_builder_state"],
-        ],
-        outputs=[
-            training_section["load_json_status"],
-            training_section["audio_files_table"],
-            training_section["sample_selector"],
-            training_section["dataset_builder_state"],
-            # Also update preview fields with first sample
-            training_section["preview_audio"],
-            training_section["preview_filename"],
-            training_section["edit_caption"],
-            training_section["edit_genre"],
-            training_section["prompt_override"],
-            training_section["edit_lyrics"],
-            training_section["edit_bpm"],
-            training_section["edit_keyscale"],
-            training_section["edit_timesig"],
-            training_section["edit_duration"],
-            training_section["edit_language"],
-            training_section["edit_instrumental"],
-            training_section["raw_lyrics_display"],
-            training_section["has_raw_lyrics_state"],
-            # Update dataset-level settings
-            training_section["dataset_name"],
-            training_section["custom_tag"],
-            training_section["tag_position"],
-            training_section["all_instrumental"],
-            training_section["genre_ratio"],
-        ]
-    ).then(
-        fn=lambda has_raw: gr.update(visible=has_raw),
-        inputs=[training_section["has_raw_lyrics_state"]],
-        outputs=[training_section["raw_lyrics_display"]],
+    register_training_dataset_load_handler(
+        training_context,
+        button_key="load_json_btn",
+        path_key="load_json_path",
+        status_key="load_json_status",
     )
-    
     # ========== Dataset Builder Handlers ==========
-    
-    # Scan directory for audio files
-    training_section["scan_btn"].click(
-        fn=lambda dir, name, tag, pos, instr, state: train_h.scan_directory(
-            dir, name, tag, pos, instr, state
-        ),
-        inputs=[
-            training_section["audio_directory"],
-            training_section["dataset_name"],
-            training_section["custom_tag"],
-            training_section["tag_position"],
-            training_section["all_instrumental"],
-            training_section["dataset_builder_state"],
-        ],
-        outputs=[
-            training_section["audio_files_table"],
-            training_section["scan_status"],
-            training_section["sample_selector"],
-            training_section["dataset_builder_state"],
-        ]
-    )
-    
-    # Auto-label all samples
-    training_section["auto_label_btn"].click(
-        fn=lambda state, skip, fmt_lyrics, trans_lyrics, only_unlab: train_h.auto_label_all(
-            dit_handler, llm_handler, state, skip, fmt_lyrics, trans_lyrics, only_unlab
-        ),
-        inputs=[
-            training_section["dataset_builder_state"],
-            training_section["skip_metas"],
-            training_section["format_lyrics"],
-            training_section["transcribe_lyrics"],
-            training_section["only_unlabeled"],
-        ],
-        outputs=[
-            training_section["audio_files_table"],
-            training_section["label_progress"],
-            training_section["dataset_builder_state"],
-        ]
-    ).then(
-        # Refresh preview/edit fields after labeling completes
-        fn=train_h.get_sample_preview,
-        inputs=[
-            training_section["sample_selector"],
-            training_section["dataset_builder_state"],
-        ],
-        outputs=[
-            training_section["preview_audio"],
-            training_section["preview_filename"],
-            training_section["edit_caption"],
-            training_section["edit_genre"],
-            training_section["prompt_override"],
-            training_section["edit_lyrics"],
-            training_section["edit_bpm"],
-            training_section["edit_keyscale"],
-            training_section["edit_timesig"],
-            training_section["edit_duration"],
-            training_section["edit_language"],
-            training_section["edit_instrumental"],
-            training_section["raw_lyrics_display"],
-            training_section["has_raw_lyrics_state"],
-        ]
-    ).then(
-        fn=lambda status: f"{status or '✅ Auto-label complete.'}\n✅ Preview refreshed.",
-        inputs=[training_section["label_progress"]],
-        outputs=[training_section["label_progress"]],
-    ).then(
-        fn=lambda has_raw: gr.update(visible=bool(has_raw)),
-        inputs=[training_section["has_raw_lyrics_state"]],
-        outputs=[training_section["raw_lyrics_display"]],
-    )
+    register_training_dataset_builder_handlers(training_context)
 
-    # Mutual exclusion: format_lyrics and transcribe_lyrics cannot both be True
-    training_section["format_lyrics"].change(
-        fn=lambda fmt: gr.update(value=False) if fmt else gr.update(),
-        inputs=[training_section["format_lyrics"]],
-        outputs=[training_section["transcribe_lyrics"]]
-    )
-
-    training_section["transcribe_lyrics"].change(
-        fn=lambda trans: gr.update(value=False) if trans else gr.update(),
-        inputs=[training_section["transcribe_lyrics"]],
-        outputs=[training_section["format_lyrics"]]
-    )
-
-    # Sample selector change - update preview
-    training_section["sample_selector"].change(
-        fn=train_h.get_sample_preview,
-        inputs=[
-            training_section["sample_selector"],
-            training_section["dataset_builder_state"],
-        ],
-        outputs=[
-            training_section["preview_audio"],
-            training_section["preview_filename"],
-            training_section["edit_caption"],
-            training_section["edit_genre"],
-            training_section["prompt_override"],
-            training_section["edit_lyrics"],
-            training_section["edit_bpm"],
-            training_section["edit_keyscale"],
-            training_section["edit_timesig"],
-            training_section["edit_duration"],
-            training_section["edit_language"],
-            training_section["edit_instrumental"],
-            training_section["raw_lyrics_display"],
-            training_section["has_raw_lyrics_state"],
-        ]
-    ).then(
-        # Show/hide raw lyrics panel based on whether raw lyrics exist
-        fn=lambda has_raw: gr.update(visible=has_raw),
-        inputs=[training_section["has_raw_lyrics_state"]],
-        outputs=[training_section["raw_lyrics_display"]],
-    )
-    
-    # Save sample edit
-    training_section["save_edit_btn"].click(
-        fn=train_h.save_sample_edit,
-        inputs=[
-            training_section["sample_selector"],
-            training_section["edit_caption"],
-            training_section["edit_genre"],
-            training_section["prompt_override"],
-            training_section["edit_lyrics"],
-            training_section["edit_bpm"],
-            training_section["edit_keyscale"],
-            training_section["edit_timesig"],
-            training_section["edit_language"],
-            training_section["edit_instrumental"],
-            training_section["dataset_builder_state"],
-        ],
-        outputs=[
-            training_section["audio_files_table"],
-            training_section["edit_status"],
-            training_section["dataset_builder_state"],
-        ]
-    )
-
-    # Update settings when changed (including genre_ratio)
-    for trigger in [training_section["custom_tag"], training_section["tag_position"], training_section["all_instrumental"], training_section["genre_ratio"]]:
-        trigger.change(
-            fn=train_h.update_settings,
-            inputs=[
-                training_section["custom_tag"],
-                training_section["tag_position"],
-                training_section["all_instrumental"],
-                training_section["genre_ratio"],
-                training_section["dataset_builder_state"],
-            ],
-            outputs=[training_section["dataset_builder_state"]]
-        )
-
-    # Save dataset
-    training_section["save_dataset_btn"].click(
-        fn=train_h.save_dataset,
-        inputs=[
-            training_section["save_path"],
-            training_section["dataset_name"],
-            training_section["dataset_builder_state"],
-        ],
-        outputs=[
-            training_section["save_status"],
-            training_section["save_path"],
-        ]
-    )
-    
     # ========== Preprocess Handlers ==========
     
     # Load existing dataset JSON for preprocessing
     # This also updates the preview section so users can view/edit samples
-    training_section["load_existing_dataset_btn"].click(
-        fn=train_h.load_existing_dataset_for_preprocess,
-        inputs=[
-            training_section["load_existing_dataset_path"],
-            training_section["dataset_builder_state"],
-        ],
-        outputs=[
-            training_section["load_existing_status"],
-            training_section["audio_files_table"],
-            training_section["sample_selector"],
-            training_section["dataset_builder_state"],
-            # Also update preview fields with first sample
-            training_section["preview_audio"],
-            training_section["preview_filename"],
-            training_section["edit_caption"],
-            training_section["edit_genre"],
-            training_section["prompt_override"],
-            training_section["edit_lyrics"],
-            training_section["edit_bpm"],
-            training_section["edit_keyscale"],
-            training_section["edit_timesig"],
-            training_section["edit_duration"],
-            training_section["edit_language"],
-            training_section["edit_instrumental"],
-            training_section["raw_lyrics_display"],
-            training_section["has_raw_lyrics_state"],
-            # Update dataset-level settings
-            training_section["dataset_name"],
-            training_section["custom_tag"],
-            training_section["tag_position"],
-            training_section["all_instrumental"],
-            training_section["genre_ratio"],
-        ]
-    ).then(
-        fn=lambda has_raw: gr.update(visible=has_raw),
-        inputs=[training_section["has_raw_lyrics_state"]],
-        outputs=[training_section["raw_lyrics_display"]],
+    register_training_dataset_load_handler(
+        training_context,
+        button_key="load_existing_dataset_btn",
+        path_key="load_existing_dataset_path",
+        status_key="load_existing_status",
     )
     
     # Preprocess dataset to tensor files
-    training_section["preprocess_btn"].click(
-        fn=lambda output_dir, mode, state: train_h.preprocess_dataset(
-            output_dir, mode, dit_handler, state
-        ),
-        inputs=[
-            training_section["preprocess_output_dir"],
-            training_section["preprocess_mode"],
-            training_section["dataset_builder_state"],
-        ],
-        outputs=[training_section["preprocess_progress"]]
-    )
-    
-    # ========== Training Tab Handlers ==========
-    
-    # Load preprocessed tensor dataset
-    training_section["load_dataset_btn"].click(
-        fn=train_h.load_training_dataset,
-        inputs=[training_section["training_tensor_dir"]],
-        outputs=[training_section["training_dataset_info"]]
-    )
-    
-    # Start training from preprocessed tensors
-    def training_wrapper(tensor_dir, r, a, d, lr, ep, bs, ga, se, sh, sd, od, rc, ts):
-        """Stream LoRA training progress and normalize failure outputs for the UI."""
-        from loguru import logger
-        if not isinstance(ts, dict):
-            ts = {"is_training": False, "should_stop": False}
-        try:
-            for progress, log_msg, plot, state in train_h.start_training(
-                tensor_dir, dit_handler, r, a, d, lr, ep, bs, ga, se, sh, sd, od, rc, ts
-            ):
-                yield progress, log_msg, plot, state
-        except Exception as e:
-            logger.exception("Training wrapper error")
-            yield f"❌ Error: {str(e)}", str(e), None, ts
-    
-    training_section["start_training_btn"].click(
-        fn=training_wrapper,
-        inputs=[
-            training_section["training_tensor_dir"],
-            training_section["lora_rank"],
-            training_section["lora_alpha"],
-            training_section["lora_dropout"],
-            training_section["learning_rate"],
-            training_section["train_epochs"],
-            training_section["train_batch_size"],
-            training_section["gradient_accumulation"],
-            training_section["save_every_n_epochs"],
-            training_section["training_shift"],
-            training_section["training_seed"],
-            training_section["lora_output_dir"],
-            training_section["resume_checkpoint_dir"],
-            training_section["training_state"],
-        ],
-        outputs=[
-            training_section["training_progress"],
-            training_section["training_log"],
-            training_section["training_loss_plot"],
-            training_section["training_state"],
-        ]
-    )
-    
-    # Stop training
-    training_section["stop_training_btn"].click(
-        fn=train_h.stop_training,
-        inputs=[training_section["training_state"]],
-        outputs=[
-            training_section["training_progress"],
-            training_section["training_state"],
-        ]
-    )
-    
-    # Export LoRA
-    training_section["export_lora_btn"].click(
-        fn=train_h.export_lora,
-        inputs=[
-            training_section["export_path"],
-            training_section["lora_output_dir"],
-        ],
-        outputs=[training_section["export_status"]]
-    )
-    
-    # ========== LoKr Training Tab Handlers ==========
-    
-    # Load preprocessed tensor dataset for LoKr
-    training_section["lokr_load_dataset_btn"].click(
-        fn=train_h.load_training_dataset,
-        inputs=[training_section["lokr_training_tensor_dir"]],
-        outputs=[training_section["lokr_training_dataset_info"]]
-    )
-    
-    # Start LoKr training from preprocessed tensors
-    def lokr_training_wrapper(
-        tensor_dir, ldim, lalpha, factor, decompose_both, use_tucker,
-        use_scalar, weight_decompose, lr, ep, bs, ga, se, sh, sd, od, ts,
-    ):
-        """Stream LoKr training progress and normalize failure outputs for the UI."""
-        from loguru import logger
-        if not isinstance(ts, dict):
-            ts = {"is_training": False, "should_stop": False}
-        try:
-            for progress, log_msg, plot, state in train_h.start_lokr_training(
-                tensor_dir, dit_handler,
-                ldim, lalpha, factor, decompose_both, use_tucker,
-                use_scalar, weight_decompose,
-                lr, ep, bs, ga, se, sh, sd, od, ts,
-            ):
-                yield progress, log_msg, plot, state
-        except Exception as e:
-            logger.exception("LoKr training wrapper error")
-            yield f"❌ Error: {str(e)}", str(e), None, ts
-    
-    training_section["start_lokr_training_btn"].click(
-        fn=lokr_training_wrapper,
-        inputs=[
-            training_section["lokr_training_tensor_dir"],
-            training_section["lokr_linear_dim"],
-            training_section["lokr_linear_alpha"],
-            training_section["lokr_factor"],
-            training_section["lokr_decompose_both"],
-            training_section["lokr_use_tucker"],
-            training_section["lokr_use_scalar"],
-            training_section["lokr_weight_decompose"],
-            training_section["lokr_learning_rate"],
-            training_section["lokr_train_epochs"],
-            training_section["lokr_train_batch_size"],
-            training_section["lokr_gradient_accumulation"],
-            training_section["lokr_save_every_n_epochs"],
-            training_section["lokr_training_shift"],
-            training_section["lokr_training_seed"],
-            training_section["lokr_output_dir"],
-            training_section["training_state"],
-        ],
-        outputs=[
-            training_section["lokr_training_progress"],
-            training_section["lokr_training_log"],
-            training_section["lokr_training_loss_plot"],
-            training_section["training_state"],
-        ]
-    )
-    
-    # Stop LoKr training (reuses same stop mechanism)
-    training_section["stop_lokr_training_btn"].click(
-        fn=train_h.stop_training,
-        inputs=[training_section["training_state"]],
-        outputs=[
-            training_section["lokr_training_progress"],
-            training_section["training_state"],
-        ]
-    )
-    
-    # Refresh LoKr export epochs
-    training_section["refresh_lokr_export_epochs_btn"].click(
-        fn=train_h.list_lokr_export_epochs,
-        inputs=[training_section["lokr_output_dir"]],
-        outputs=[
-            training_section["lokr_export_epoch"],
-            training_section["lokr_export_status"],
-        ]
-    )
-    
-    # Export LoKr
-    training_section["export_lokr_btn"].click(
-        fn=train_h.export_lokr,
-        inputs=[
-            training_section["lokr_export_path"],
-            training_section["lokr_output_dir"],
-            training_section["lokr_export_epoch"],
-        ],
-        outputs=[training_section["lokr_export_status"]]
-    )
+    register_training_preprocess_handler(training_context)
+    register_training_run_handlers(training_context)

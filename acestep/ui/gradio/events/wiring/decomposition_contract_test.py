@@ -15,6 +15,13 @@ _RUN_WIRING_PATH = Path(__file__).resolve().with_name("generation_run_wiring.py"
 _BATCH_NAV_WIRING_PATH = Path(__file__).resolve().with_name(
     "generation_batch_navigation_wiring.py"
 )
+_TRAINING_DATASET_BUILDER_WIRING_PATH = Path(__file__).resolve().with_name(
+    "training_dataset_builder_wiring.py"
+)
+_TRAINING_DATASET_PREPROCESS_WIRING_PATH = Path(__file__).resolve().with_name(
+    "training_dataset_preprocess_wiring.py"
+)
+_TRAINING_RUN_WIRING_PATH = Path(__file__).resolve().with_name("training_run_wiring.py")
 
 
 def _load_setup_event_handlers_node() -> ast.FunctionDef:
@@ -26,6 +33,17 @@ def _load_setup_event_handlers_node() -> ast.FunctionDef:
         if isinstance(node, ast.FunctionDef) and node.name == "setup_event_handlers":
             return node
     raise AssertionError("setup_event_handlers not found")
+
+
+def _load_setup_training_event_handlers_node() -> ast.FunctionDef:
+    """Return the AST node for ``setup_training_event_handlers``."""
+
+    source = _EVENTS_INIT_PATH.read_text(encoding="utf-8")
+    module = ast.parse(source)
+    for node in module.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "setup_training_event_handlers":
+            return node
+    raise AssertionError("setup_training_event_handlers not found")
 
 
 def _load_generation_mode_wiring_node() -> ast.FunctionDef:
@@ -59,6 +77,27 @@ def _load_generation_batch_navigation_wiring_node() -> ast.FunctionDef:
         if isinstance(node, ast.FunctionDef) and node.name == "register_generation_batch_navigation_handlers":
             return node
     raise AssertionError("register_generation_batch_navigation_handlers not found")
+
+
+def _load_training_run_wiring_module() -> ast.Module:
+    """Return the parsed AST module for ``training_run_wiring.py``."""
+
+    source = _TRAINING_RUN_WIRING_PATH.read_text(encoding="utf-8")
+    return ast.parse(source)
+
+
+def _load_training_dataset_preprocess_wiring_module() -> ast.Module:
+    """Return the parsed AST module for training dataset/preprocess wiring."""
+
+    source = _TRAINING_DATASET_PREPROCESS_WIRING_PATH.read_text(encoding="utf-8")
+    return ast.parse(source)
+
+
+def _load_training_dataset_builder_wiring_module() -> ast.Module:
+    """Return the parsed AST module for training dataset-builder wiring."""
+
+    source = _TRAINING_DATASET_BUILDER_WIRING_PATH.read_text(encoding="utf-8")
+    return ast.parse(source)
 
 
 def _call_name(node: ast.AST) -> str | None:
@@ -151,6 +190,77 @@ class DecompositionContractTests(unittest.TestCase):
         self.assertIn("capture_current_params", attribute_names)
         self.assertIn("navigate_to_next_batch", attribute_names)
         self.assertIn("generate_next_batch_background", call_names)
+
+    def test_setup_training_event_handlers_uses_training_run_wiring_helper(self):
+        """setup_training_event_handlers should delegate run-tab wiring registration."""
+
+        setup_node = _load_setup_training_event_handlers_node()
+        call_names = []
+        for node in ast.walk(setup_node):
+            if isinstance(node, ast.Call):
+                name = _call_name(node.func)
+                if name:
+                    call_names.append(name)
+
+        self.assertIn("register_training_run_handlers", call_names)
+        self.assertIn("register_training_dataset_builder_handlers", call_names)
+        self.assertIn("register_training_dataset_load_handler", call_names)
+        self.assertIn("register_training_preprocess_handler", call_names)
+
+    def test_training_run_wiring_calls_expected_training_handlers(self):
+        """Training run wiring should still invoke both training and LoKr handlers."""
+
+        wiring_node = _load_training_run_wiring_module()
+        call_names = []
+        attribute_names = []
+        for node in ast.walk(wiring_node):
+            if isinstance(node, ast.Call):
+                name = _call_name(node.func)
+                if name:
+                    call_names.append(name)
+            if isinstance(node, ast.Attribute):
+                attribute_names.append(node.attr)
+
+        self.assertIn("start_training", call_names)
+        self.assertIn("start_lokr_training", call_names)
+        self.assertIn("stop_training", attribute_names)
+
+    def test_training_dataset_builder_wiring_calls_expected_handlers(self):
+        """Dataset-builder wiring should call scan/label/edit/settings/save handlers."""
+
+        wiring_node = _load_training_dataset_builder_wiring_module()
+        call_names = []
+        attribute_names = []
+        for node in ast.walk(wiring_node):
+            if isinstance(node, ast.Call):
+                name = _call_name(node.func)
+                if name:
+                    call_names.append(name)
+            if isinstance(node, ast.Attribute):
+                attribute_names.append(node.attr)
+
+        self.assertIn("scan_directory", call_names)
+        self.assertIn("auto_label_all", call_names)
+        self.assertIn("save_sample_edit", attribute_names)
+        self.assertIn("update_settings", attribute_names)
+        self.assertIn("save_dataset", attribute_names)
+
+    def test_training_dataset_preprocess_wiring_calls_expected_handlers(self):
+        """Dataset/preprocess wiring should call existing training handler entry points."""
+
+        wiring_node = _load_training_dataset_preprocess_wiring_module()
+        call_names = []
+        attribute_names = []
+        for node in ast.walk(wiring_node):
+            if isinstance(node, ast.Call):
+                name = _call_name(node.func)
+                if name:
+                    call_names.append(name)
+            if isinstance(node, ast.Attribute):
+                attribute_names.append(node.attr)
+
+        self.assertIn("load_existing_dataset_for_preprocess", attribute_names)
+        self.assertIn("preprocess_dataset", call_names)
 
 
 if __name__ == "__main__":
