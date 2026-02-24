@@ -39,6 +39,7 @@ class AudioPlayerPreferencesHeadTests(unittest.TestCase):
         self.assertIn("player.pause()", script)
         self.assertIn("STARTUP_RESYNC_WINDOW_MS", script)
         self.assertIn("setInterval", script)
+        self.assertIn("DEFAULT_VOLUME = 0.5", script)
 
     def test_script_resets_audio_position_on_updates(self):
         """Regression path: script should force playback to track start on reloads."""
@@ -46,6 +47,13 @@ class AudioPlayerPreferencesHeadTests(unittest.TestCase):
         self.assertIn("currentTime = 0", script)
         self.assertIn("loadstart", script)
         self.assertIn("loadedmetadata", script)
+
+    def test_script_seeds_sane_default_volume_when_storage_missing(self):
+        """Missing/invalid storage should seed and persist a 0.5 default on startup."""
+        script = get_audio_player_preferences_head()
+        self.assertIn("if (value === null || value === undefined || value === \"\")", script)
+        self.assertIn("if (preferredVolume === null)", script)
+        self.assertIn("storePreferredVolume(DEFAULT_VOLUME);", script)
 
     def test_script_generation_is_stable(self):
         """Non-target behavior: function should be deterministic for repeated calls."""

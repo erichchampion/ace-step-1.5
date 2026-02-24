@@ -13,6 +13,7 @@ def get_audio_player_preferences_head() -> str:
 (() => {
     const STORAGE_KEY = "acestep.ui.audio.volume";
     const GENERATE_BUTTON_ID = "acestep-generate-btn";
+    const DEFAULT_VOLUME = 0.5;
     const EPSILON = 0.001;
     const STARTUP_RESYNC_WINDOW_MS = 3000;
     const STARTUP_RESYNC_INTERVAL_MS = 120;
@@ -28,6 +29,9 @@ def get_audio_player_preferences_head() -> str:
     let startupResyncTimer = null;
 
     const clampVolume = (value) => {
+        if (value === null || value === undefined || value === "") {
+            return null;
+        }
         const parsed = Number(value);
         if (!Number.isFinite(parsed)) {
             return null;
@@ -43,7 +47,8 @@ def get_audio_player_preferences_head() -> str:
 
     const loadPreferredVolume = () => {
         try {
-            return clampVolume(window.localStorage.getItem(STORAGE_KEY));
+            const stored = window.localStorage.getItem(STORAGE_KEY);
+            return clampVolume(stored);
         } catch (_error) {
             return null;
         }
@@ -361,6 +366,13 @@ def get_audio_player_preferences_head() -> str:
 
     const start = () => {
         preferredVolume = loadPreferredVolume();
+        if (preferredVolume === null) {
+            // First run (or invalid storage): seed a sane audible default.
+            storePreferredVolume(DEFAULT_VOLUME);
+            if (preferredVolume === null) {
+                preferredVolume = DEFAULT_VOLUME;
+            }
+        }
         document.addEventListener("click", handleDocumentClick, true);
         scanPlayers();
         beginStartupResync();
