@@ -88,14 +88,34 @@ class ModeUiStateClearingTests(unittest.TestCase):
         self.assertNotIn("value", src_update)
 
     def test_round_trip_remix_to_custom_clears_both(self):
-        """Switching Remix -> Custom should clear both codes and src_audio."""
+        """Switching Remix -> Custom should clear both audio_codes and src_audio.
+
+        analyze_btn in Remix mode writes codes to text2music_audio_code_string.
+        These must be cleared when entering Custom mode so stale codes are not
+        passed to the DiT (the root cause of garbled audio after tab-switching).
+        """
         result = compute_mode_ui_updates("Custom", previous_mode="Remix")
         codes_update = result[_IDX_AUDIO_CODES]
         src_update = result[_IDX_SRC_AUDIO]
-        # Custom mode should not clear codes (it uses them)
+        # Codes from analyze_btn in Remix must be cleared
+        self.assertEqual(codes_update.get("value"), "")
         self.assertTrue(codes_update.get("visible"))
-        # But src_audio should be cleared
+        # src_audio should also be cleared
         self.assertIsNone(src_update.get("value"))
+
+    def test_repaint_to_custom_clears_audio_codes(self):
+        """Switching Repaint -> Custom should clear audio codes (analyze_btn contaminates them)."""
+        result = compute_mode_ui_updates("Custom", previous_mode="Repaint")
+        codes_update = result[_IDX_AUDIO_CODES]
+        self.assertEqual(codes_update.get("value"), "")
+        self.assertTrue(codes_update.get("visible"))
+
+    def test_simple_to_custom_preserves_audio_codes(self):
+        """Switching Simple -> Custom should NOT clear audio codes (Simple has no analyze_btn)."""
+        result = compute_mode_ui_updates("Custom", previous_mode="Simple")
+        codes_update = result[_IDX_AUDIO_CODES]
+        self.assertNotIn("value", codes_update)
+        self.assertTrue(codes_update.get("visible"))
 
     def test_round_trip_custom_to_remix_clears_codes(self):
         """Switching Custom -> Remix should clear stale audio codes."""
