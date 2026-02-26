@@ -1529,6 +1529,17 @@ def create_app() -> FastAPI:
                             print("[API Server] LLM lazy load blocked: LLM was not initialized at startup")
                             return
 
+                        # Respect ACESTEP_INIT_LLM=false even in lazy-load / --no-init mode
+                        init_llm_env = os.getenv("ACESTEP_INIT_LLM", "").strip().lower()
+                        if init_llm_env in {"0", "false", "no", "n", "off"}:
+                            app.state._llm_lazy_load_disabled = True
+                            app.state._llm_init_error = (
+                                "LLM disabled via ACESTEP_INIT_LLM=false. "
+                                "Optional LLM features (use_cot_caption, use_cot_language) will be auto-disabled."
+                            )
+                            print("[API Server] LLM lazy load blocked: ACESTEP_INIT_LLM=false")
+                            return
+
                         project_root = _get_project_root()
                         checkpoint_dir = os.path.join(project_root, "checkpoints")
                         lm_model_path = (req.lm_model_path or os.getenv("ACESTEP_LM_MODEL_PATH") or "acestep-5Hz-lm-0.6B").strip()
