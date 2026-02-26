@@ -62,10 +62,15 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         )
         progress?(0, "Starting diffusion")
 
+        let conditions = conditioningProvider?(params) ?? DiTConditions()
         let key: MLXArray? = (params.seed >= 0) ? MLXRandom.key(UInt64(params.seed)) : nil
         let noise = MLXRandom.normal([b, t, latentChannels], key: key)
-        var xt = noise
-        let conditions = conditioningProvider?(params) ?? DiTConditions()
+        var xt: MLXArray
+        if let initial = conditions.initialLatents, initial.shape[0] == b, initial.shape[1] == t {
+            xt = initial
+        } else {
+            xt = noise
+        }
 
         for (stepIdx, timestepVal) in schedule.enumerated() {
             let nextT: Float? = (stepIdx + 1 < schedule.count) ? Float(schedule[stepIdx + 1]) : nil

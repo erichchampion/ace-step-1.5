@@ -15,4 +15,8 @@ public final class MockLLMFormatProvider: LLMFormatProvider {
     public func generateFormat(caption: String, lyrics: String, userMetadata: [String: Any]?, temperature: Double) async throws -> String {
         responseText
     }
+
+    public func generateFromQuery(query: String, instrumental: Bool, vocalLanguage: String?, temperature: Double) async throws -> String {
+        responseText
+    }
 }

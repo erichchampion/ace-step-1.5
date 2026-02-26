@@ -101,4 +101,47 @@ public enum AceStepEngine {
         }
         return FormatSampleParser.parseToFormatSampleResult(outputText: raw, fallbackLyrics: lyr)
     }
+
+    /// Returns a random preset for form filling. sampleType: "simple_mode" or "custom_mode" (defaults to "simple_mode").
+    /// Does not call the LLM. Optional follow-up: pass result caption/lyrics to formatSample for enhancement.
+    public static func createRandomSample(sampleType: String = "simple_mode") -> RandomSampleResult {
+        RandomSampleStore.pickRandom(sampleType: sampleType)
+    }
+
+    /// Create a music sample from a natural language query via the LLM. Returns CreateSampleResult (caption, lyrics, metadata).
+    public static func createSample(
+        query: String,
+        instrumental: Bool = false,
+        vocalLanguage: String? = nil,
+        temperature: Double = 0.85,
+        llmProvider: LLMFormatProvider?
+    ) -> CreateSampleResult {
+        guard let provider = llmProvider, provider.isInitialized else {
+            return CreateSampleResult(
+                statusMessage: "LLM not initialized",
+                success: false,
+                error: "LLM not initialized"
+            )
+        }
+        var outputText: String?
+        let group = DispatchGroup()
+        group.enter()
+        Task {
+            defer { group.leave() }
+            do {
+                outputText = try await provider.generateFromQuery(query: query, instrumental: instrumental, vocalLanguage: vocalLanguage, temperature: temperature)
+            } catch {
+                outputText = nil
+            }
+        }
+        group.wait()
+        guard let raw = outputText, !raw.isEmpty else {
+            return CreateSampleResult(
+                statusMessage: "Create sample failed",
+                success: false,
+                error: "Create sample failed"
+            )
+        }
+        return FormatSampleParser.parseToCreateSampleResult(outputText: raw, instrumental: instrumental)
+    }
 }

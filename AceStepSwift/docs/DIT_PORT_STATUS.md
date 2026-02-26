@@ -27,6 +27,10 @@ The **DiT** (diffusion transformer) from `acestep/models/mlx/dit_model.py` is **
 - `DiffusionStepper.step(..., nextTimestep: Float?)` – when non-nil, ODE uses `dt = timestep - nextTimestep`; when nil (last step), uses `xt - vt * timestep`.
 - `ContractGenerationPipeline` passes `nextTimestep` from the schedule so the stepper can compute the correct step.
 
+### Task types (cover, repaint, lego, extract, complete)
+
+When `params.taskType` is `cover`, `repaint`, `lego`, `extract`, or `complete` and `params.srcAudio != nil`, the conditioning provider should load and encode the source audio (VAE encode), use the task-specific instruction from `TaskInstructions.instruction(for: params)`, and set `DiTConditions.initialLatents` from the encoded source so the diffusion loop starts from it. For extract and complete (no repaint span), use the full encoded source as initial latents; no repaint-span masking is required.
+
 ## Weight loading
 
 After porting, use Python `dit_convert.convert_and_load` (or equivalent) to produce a safetensors file, then in Swift:

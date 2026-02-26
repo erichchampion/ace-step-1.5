@@ -8,6 +8,16 @@ final class GenerationParamsTests: XCTestCase {
         XCTAssertEqual(params.taskType, "text2music")
     }
 
+    func testDefaultLegoTrackIsNil() {
+        let params = GenerationParams()
+        XCTAssertNil(params.legoTrack)
+    }
+
+    func testDefaultCompleteTrackClassesIsNil() {
+        let params = GenerationParams()
+        XCTAssertNil(params.completeTrackClasses)
+    }
+
     func testDefaultCaptionAndLyricsAreEmpty() {
         let params = GenerationParams()
         XCTAssertEqual(params.caption, "")

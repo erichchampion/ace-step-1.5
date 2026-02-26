@@ -55,6 +55,47 @@ public final class MLXLLMFormatProvider: LLMFormatProvider {
         return try await session.respond(to: prompt)
     }
 
+    public func generateFromQuery(
+        query: String,
+        instrumental: Bool,
+        vocalLanguage: String?,
+        temperature: Double
+    ) async throws -> String {
+        guard let container else {
+            throw MLXLLMFormatProviderError.notInitialized
+        }
+        let params = GenerateParameters(
+            maxTokens: 2048,
+            temperature: Float(temperature),
+            topP: 0.9
+        )
+        let prompt = buildInspirationPrompt(query: query, instrumental: instrumental)
+        let session = ChatSession(container, generateParameters: params)
+        return try await session.respond(to: prompt)
+    }
+
+    private func buildInspirationPrompt(query: String, instrumental: Bool) -> String {
+        let q = query.trimmingCharacters(in: .whitespaces).isEmpty ? "NO USER INPUT" : query
+        let inst = instrumental ? "true" : "false"
+        return """
+        # Instruction
+        Expand the user's input into a more detailed and specific musical description.
+        Output exactly in this format inside a <think> block:
+        <think>
+        bpm: [30-300]
+        caption: [one sentence description ending with a period]
+        duration: [10-600]
+        keyscale: [e.g. C major or Am]
+        language: [e.g. en, zh, ja]
+        timesignature: [2, 3, 4, or 6]
+        </think>
+
+        \(q)
+
+        instrumental: \(inst)
+        """
+    }
+
     private func buildFormatPrompt(caption: String, lyrics: String) -> String {
         """
         Format the following music caption and lyrics into structured metadata.

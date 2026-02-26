@@ -1,4 +1,5 @@
 import XCTest
+import MLX
 @testable import AceStepSwift
 
 final class GenerateMusicAPITests: XCTestCase {
@@ -85,5 +86,33 @@ final class GenerateMusicAPITests: XCTestCase {
         XCTAssertNotNil(sr)
         XCTAssertEqual(sr, AceStepConstants.defaultSampleRate)
         XCTAssertFalse(tensor?.isEmpty ?? true)
+    }
+
+    /// When conditioning provider supplies initialLatents (e.g. cover/repaint), pipeline starts from it instead of noise.
+    func testPipelineUsesInitialLatentsWhenProvided() {
+        let latentLen = latentLengthFromDuration(durationSeconds: 10, sampleRate: AceStepConstants.defaultSampleRate)
+        let initialLatents = MLXArray.zeros([1, latentLen, 64])
+        let pipeline = ContractGenerationPipeline(
+            stepper: FakeDiffusionStepper(),
+            decoder: FakeVAEDecoder(),
+            sampleRate: AceStepConstants.defaultSampleRate,
+            conditioningProvider: { _ in
+                DiTConditions(initialLatents: initialLatents)
+            }
+        )
+        let result = AceStepEngine.generateMusic(
+            params: GenerationParams(
+                caption: "cover",
+                lyrics: "[Instrumental]",
+                duration: 10,
+                inferenceSteps: 2,
+                seed: 1
+            ),
+            config: GenerationConfig(batchSize: 1),
+            progress: nil,
+            pipeline: pipeline
+        )
+        XCTAssertTrue(result.success, result.error ?? "no error")
+        XCTAssertFalse(result.audios.isEmpty)
     }
 }

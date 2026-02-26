@@ -116,6 +116,40 @@ public enum FormatSampleParser {
         )
     }
 
+    /// Parse create_sample LLM output into CreateSampleResult. Reuses <think> metadata + lyrics extraction.
+    public static func parseToCreateSampleResult(outputText: String, instrumental: Bool) -> CreateSampleResult {
+        let (metadata, extractedLyrics) = parseLMOutput(outputText)
+        let lyrics = extractedLyrics.isEmpty ? (instrumental ? "[Instrumental]" : "") : extractedLyrics
+
+        var bpm: Int?
+        if let v = metadata["bpm"] as? Int { bpm = v }
+        else if let v = metadata["bpm"] as? String, let i = Int(v) { bpm = i }
+
+        var duration: Double?
+        if let v = metadata["duration"] as? Int { duration = Double(v) }
+        else if let v = metadata["duration"] as? Double { duration = v }
+        else if let v = metadata["duration"] as? String, let d = Double(v) { duration = d }
+
+        let caption = (metadata["caption"] as? String) ?? ""
+        let keyscale = (metadata["keyscale"] as? String) ?? ""
+        let language = (metadata["language"] as? String) ?? ""
+        let timesignature = (metadata["timesignature"] as? String) ?? ""
+
+        return CreateSampleResult(
+            caption: caption,
+            lyrics: lyrics,
+            bpm: bpm,
+            duration: duration,
+            keyscale: keyscale,
+            language: language,
+            timesignature: timesignature,
+            instrumental: instrumental,
+            statusMessage: "OK",
+            success: true,
+            error: nil
+        )
+    }
+
     private static func extractReasoningBlock(_ outputText: String) -> String? {
         let startTags = ["<think>", "`think`", "<reasoning>"]
         let endTags = ["</think>", "`/think`", "</reasoning>"]

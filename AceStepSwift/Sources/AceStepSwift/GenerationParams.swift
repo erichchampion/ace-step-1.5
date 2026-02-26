@@ -33,6 +33,10 @@ public struct GenerationParams {
     public var repaintingEnd: Double
     public var audioCoverStrength: Double
     public var coverNoiseStrength: Double
+    /// For lego/extract tasks: track name (e.g. "vocals", "drums"). Used in task instruction.
+    public var legoTrack: String?
+    /// For complete task: track classes (e.g. ["vocals", "drums"]). Used in task instruction.
+    public var completeTrackClasses: [String]?
     public var thinking: Bool
     public var lmTemperature: Double
     public var lmCfgScale: Double
@@ -74,6 +78,8 @@ public struct GenerationParams {
         repaintingEnd: Double = -1,
         audioCoverStrength: Double = 1.0,
         coverNoiseStrength: Double = 0.0,
+        legoTrack: String? = nil,
+        completeTrackClasses: [String]? = nil,
         thinking: Bool = true,
         lmTemperature: Double = 0.85,
         lmCfgScale: Double = 2.0,
@@ -114,6 +120,8 @@ public struct GenerationParams {
         self.repaintingEnd = repaintingEnd
         self.audioCoverStrength = audioCoverStrength
         self.coverNoiseStrength = coverNoiseStrength
+        self.legoTrack = legoTrack
+        self.completeTrackClasses = completeTrackClasses
         self.thinking = thinking
         self.lmTemperature = lmTemperature
         self.lmCfgScale = lmCfgScale
