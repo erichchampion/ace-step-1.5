@@ -246,3 +246,14 @@ lokr_output/
 
 # macOS
 .DS_Store
+
+# Swift Package Manager (AceStepSwift)
+AceStepSwift/.build/
+AceStepSwift/.swiftpm/
+# Allow AceStepSwift test target (root tests/ is ignored elsewhere)
+!AceStepSwift/Tests/
+
+# Xcode (if opening AceStepSwift or a workspace)
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
