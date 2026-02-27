@@ -53,6 +53,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     private let decoder: VAEDecoder
     private let sampleRate: Int
     private let conditioningProvider: ConditioningProvider?
+    private let debugLogPath = "/Users/erich/git/github/erichchampion/cadenza-audio/.cursor/debug-b449ae.log"
 
     public var isInitialized: Bool { true }
 
@@ -85,6 +86,16 @@ public final class ContractGenerationPipeline: GenerationPipeline {
 
         var conditions = conditioningProvider?(params, t, sampleRate) ?? DiTConditions()
         conditions = try alignConditionsToBatch(conditions, batchSize: b)
+        #if DEBUG
+        if let enc = conditions.encoderHiddenStates, let ctx = conditions.contextLatents {
+            let encStats = tensorMeanStd(enc)
+            let ctxStats = tensorMeanStd(ctx)
+            debugPrint(
+                "[ConditioningDiagnostics] pipeline enc(std=\(formatStat(encStats.std)),shape=\(enc.shape)) " +
+                "ctx(std=\(formatStat(ctxStats.std)),shape=\(ctx.shape))"
+            )
+        }
+        #endif
         let usingDefaultConditions = (conditions.encoderHiddenStates == nil && conditions.contextLatents == nil)
         if usingDefaultConditions && stepper is MLXDiTStepper {
             throw ContractGenerationPipelineError.missingConditioning
@@ -104,6 +115,12 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         } else {
             xt = noise
         }
+        #if DEBUG
+        let initialStats = tensorMeanStd(xt)
+        debugPrint(
+            "[GenerationDiagnostics] initial_latent mean=\(formatStat(initialStats.mean)) std=\(formatStat(initialStats.std))"
+        )
+        #endif
 
         var apgMomentumState: [String: MLXArray]? = [:]
         for (stepIdx, timestepVal) in schedule.enumerated() {
@@ -116,6 +133,13 @@ public final class ContractGenerationPipeline: GenerationPipeline {
                 params: params,
                 momentumState: &apgMomentumState
             )
+            #if DEBUG
+            let stepStats = tensorMeanStd(xt)
+            let variance = stepStats.std * stepStats.std
+            debugPrint(
+                "[GenerationDiagnostics] step=\(stepIdx + 1)/\(schedule.count) t=\(formatStat(Float(timestepVal))) latent_var=\(formatStat(variance)) mean=\(formatStat(stepStats.mean)) std=\(formatStat(stepStats.std))"
+            )
+            #endif
             let frac = Double(stepIdx + 1) / Double(schedule.count)
             progress?(frac * 0.9, "Diffusion step \(stepIdx + 1)/\(schedule.count)")
         }
@@ -132,7 +156,33 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         guard audio.ndim == 2 || audio.ndim == 3 else {
             throw ContractGenerationPipelineError.invalidDecodedAudioShape(audio.shape)
         }
+        #if DEBUG
+        // #region agent log
+        appendDebugLog(runId: "pre-fix-1", hypothesisId: "H3", location: "ContractGenerationPipeline.run", message: "Decoded audio tensor shape", data: [
+            "audioShape": audio.shape.map(String.init)
+        ])
+        // #endregion
+        if audio.ndim == 3, audio.dim(2) == 2 {
+            let b0 = 0..<1
+            let t = 0..<audio.dim(1)
+            let left = audio[b0, t, 0..<1].squeezed(axis: 2)
+            let right = audio[b0, t, 1..<2].squeezed(axis: 2)
+            let lStats = tensorMeanStd(left)
+            let rStats = tensorMeanStd(right)
+            debugPrint(
+                "[ChannelDiagnostics] directIndexing L(mean=\(formatStat(lStats.mean)),std=\(formatStat(lStats.std))) " +
+                "R(mean=\(formatStat(rStats.mean)),std=\(formatStat(rStats.std)))"
+            )
+        }
+        #endif
         audio = normalizePeakIfNeeded(audio)
+        #if DEBUG
+        let audioStats = tensorMeanStd(audio)
+        let audioPeak = MLX.abs(audio).max().item(Float.self)
+        debugPrint(
+            "[GenerationDiagnostics] final_audio peak=\(formatStat(audioPeak)) mean=\(formatStat(audioStats.mean)) std=\(formatStat(audioStats.std))"
+        )
+        #endif
         audio.eval()
 
         let audios = buildAudiosFromDecoded(audio)
@@ -245,6 +295,24 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         return audio / safePeak
     }
 
+    private func tensorMeanStd(_ x: MLXArray) -> (mean: Float, std: Float) {
+        let mean = x.mean().item(Float.self)
+        let centered = x - MLXArray(mean)
+        let variance = (centered * centered).mean().item(Float.self)
+        return (mean, sqrt(max(variance, 0.0)))
+    }
+
+    private func formatStat(_ value: Float) -> String {
+        String(format: "%.6f", value)
+    }
+
+    private func stats(_ x: [Float]) -> (mean: Float, std: Float) {
+        guard !x.isEmpty else { return (0, 0) }
+        let mean = x.reduce(0, +) / Float(x.count)
+        let variance = x.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Float(x.count)
+        return (mean, sqrt(max(variance, 0.0)))
+    }
+
     /// Build audios list from decoded [B, samples] or [B, L, C] (e.g. stereo) array.
     private func buildAudiosFromDecoded(_ audio: MLXArray) -> [[String: Any]] {
         let shape = audio.shape
@@ -260,12 +328,78 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             let start = i * samplesPerBatch
             let end = start + samplesPerBatch
             let slice = Array(floats[start..<end])
+            #if DEBUG
+            if channels == 2 && slice.count >= 4 {
+                var leftInterleaved: [Float] = []
+                var rightInterleaved: [Float] = []
+                leftInterleaved.reserveCapacity(slice.count / 2)
+                rightInterleaved.reserveCapacity(slice.count / 2)
+                for j in stride(from: 0, to: slice.count - 1, by: 2) {
+                    leftInterleaved.append(slice[j])
+                    rightInterleaved.append(slice[j + 1])
+                }
+                let interLeft = stats(leftInterleaved)
+                let interRight = stats(rightInterleaved)
+
+                let half = slice.count / 2
+                let leftChannelsFirst = Array(slice[0..<half])
+                let rightChannelsFirst = Array(slice[half..<(half * 2)])
+                let cfLeft = stats(leftChannelsFirst)
+                let cfRight = stats(rightChannelsFirst)
+
+                let preview = Array(slice.prefix(12)).map { formatStat($0) }.joined(separator: ",")
+                debugPrint(
+                    "[LayoutDiagnostics] batch=\(i) interleaved(Lstd=\(formatStat(interLeft.std)),Rstd=\(formatStat(interRight.std)),Lmean=\(formatStat(interLeft.mean)),Rmean=\(formatStat(interRight.mean))) " +
+                    "channelsFirst(Lstd=\(formatStat(cfLeft.std)),Rstd=\(formatStat(cfRight.std)),Lmean=\(formatStat(cfLeft.mean)),Rmean=\(formatStat(cfRight.mean))) first12=[\(preview)]"
+                )
+            }
+            #endif
             result.append([
                 "tensor": slice,
                 "sample_rate": sampleRate,
                 "channels": channels
             ] as [String: Any])
+            #if DEBUG
+            // #region agent log
+            appendDebugLog(runId: "pre-fix-1", hypothesisId: "H3", location: "ContractGenerationPipeline.buildAudiosFromDecoded", message: "Output slice stats", data: [
+                "batchIndex": i,
+                "channels": channels,
+                "samplesPerBatch": samplesPerBatch,
+                "shape": shape.map(String.init),
+                "first8": Array(slice.prefix(8))
+            ])
+            // #endregion
+            #endif
         }
         return result
     }
+
+    #if DEBUG
+    private func appendDebugLog(runId: String, hypothesisId: String, location: String, message: String, data: [String: Any]) {
+        let payload: [String: Any] = [
+            "sessionId": "b449ae",
+            "id": UUID().uuidString,
+            "runId": runId,
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: payload),
+              var line = String(data: json, encoding: .utf8) else { return }
+        line.append("\n")
+        if let d = line.data(using: .utf8) {
+            let url = URL(fileURLWithPath: debugLogPath)
+            if FileManager.default.fileExists(atPath: debugLogPath),
+               let handle = try? FileHandle(forWritingTo: url) {
+                try? handle.seekToEnd()
+                try? handle.write(contentsOf: d)
+                try? handle.close()
+            } else {
+                try? d.write(to: url)
+            }
+        }
+    }
+    #endif
 }
