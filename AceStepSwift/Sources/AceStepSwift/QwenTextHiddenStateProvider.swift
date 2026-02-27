@@ -5,6 +5,12 @@ import MLXLLM
 
 public protocol TextHiddenStateProvider: AnyObject {
     func encodeHiddenStates(text: String, maxLength: Int) throws -> (hiddenStates: MLXArray, attentionMask: MLXArray)
+    /// Lyric branch states for ConditionEncoder.lyricEncoder path.
+    /// Default implementation can mirror encodeHiddenStates; providers may override.
+    func encodeLyricHiddenStates(text: String, maxLength: Int) throws -> (hiddenStates: MLXArray, attentionMask: MLXArray)
+    /// Token embedding branch used when a provider can expose embed_tokens directly.
+    /// Default implementation falls back to encodeLyricHiddenStates.
+    func encodeTokenEmbeddings(text: String, maxLength: Int) throws -> (embeddings: MLXArray, attentionMask: MLXArray)
 }
 
 public enum QwenTextHiddenStateProviderError: Error {
@@ -60,6 +66,21 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
         hiddenStates.eval()
         return (hiddenStates, attentionMask)
     }
+
+    public func encodeLyricHiddenStates(text: String, maxLength: Int = 2048) throws -> (
+        hiddenStates: MLXArray, attentionMask: MLXArray
+    ) {
+        try encodeHiddenStates(text: text, maxLength: maxLength)
+    }
+
+    public func encodeTokenEmbeddings(text: String, maxLength: Int = 2048) throws -> (
+        embeddings: MLXArray, attentionMask: MLXArray
+    ) {
+        // MLXLLM does not currently expose Qwen embed_tokens publicly; keep parity shape by
+        // using the lyric hidden-state branch output until direct embedding lookup is exposed.
+        let lyric = try encodeLyricHiddenStates(text: text, maxLength: maxLength)
+        return (lyric.hiddenStates, lyric.attentionMask)
+    }
 }
 
 private extension NSLock {
@@ -67,5 +88,16 @@ private extension NSLock {
         lock()
         defer { unlock() }
         return try body()
+    }
+}
+
+public extension TextHiddenStateProvider {
+    func encodeLyricHiddenStates(text: String, maxLength: Int) throws -> (hiddenStates: MLXArray, attentionMask: MLXArray) {
+        try encodeHiddenStates(text: text, maxLength: maxLength)
+    }
+
+    func encodeTokenEmbeddings(text: String, maxLength: Int) throws -> (embeddings: MLXArray, attentionMask: MLXArray) {
+        let lyric = try encodeLyricHiddenStates(text: text, maxLength: maxLength)
+        return (lyric.hiddenStates, lyric.attentionMask)
     }
 }

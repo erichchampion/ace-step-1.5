@@ -11,6 +11,8 @@ import MLXRandom
 private enum ContractGenerationPipelineError: LocalizedError {
     case missingConditioning
     case conditionBatchMismatch(name: String, expected: Int, actual: Int)
+    case invalidLatentShape([Int])
+    case invalidDecodedAudioShape([Int])
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +20,10 @@ private enum ContractGenerationPipelineError: LocalizedError {
             return "Missing DiT conditioning (encoderHiddenStates/contextLatents). Real generation requires a ConditioningProvider matching Python prepare_condition."
         case .conditionBatchMismatch(let name, let expected, let actual):
             return "Condition batch mismatch for \(name): expected batch \(expected), got \(actual). Provide batch-aligned conditioning or batch=1."
+        case .invalidLatentShape(let shape):
+            return "Invalid latent shape before VAE decode: \(shape). Expected [B, T, \(latentChannels)]."
+        case .invalidDecodedAudioShape(let shape):
+            return "Invalid decoded audio shape: \(shape). Expected [B, samples] or [B, samples, channels]."
         }
     }
 }
@@ -99,6 +105,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             xt = noise
         }
 
+        var apgMomentumState: [String: MLXArray]? = [:]
         for (stepIdx, timestepVal) in schedule.enumerated() {
             let nextT: Float? = (stepIdx + 1 < schedule.count) ? Float(schedule[stepIdx + 1]) : nil
             xt = runDiffusionStep(
@@ -106,7 +113,8 @@ public final class ContractGenerationPipeline: GenerationPipeline {
                 timestep: Float(timestepVal),
                 nextTimestep: nextT,
                 conditions: conditions,
-                params: params
+                params: params,
+                momentumState: &apgMomentumState
             )
             let frac = Double(stepIdx + 1) / Double(schedule.count)
             progress?(frac * 0.9, "Diffusion step \(stepIdx + 1)/\(schedule.count)")
@@ -117,7 +125,13 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         if params.latentShift != 0.0 || params.latentRescale != 1.0 {
             decodeLatent = decodeLatent * Float(params.latentRescale) + Float(params.latentShift)
         }
+        guard decodeLatent.ndim == 3, decodeLatent.dim(2) == latentChannels else {
+            throw ContractGenerationPipelineError.invalidLatentShape(decodeLatent.shape)
+        }
         var audio = decoder.decode(latent: decodeLatent)
+        guard audio.ndim == 2 || audio.ndim == 3 else {
+            throw ContractGenerationPipelineError.invalidDecodedAudioShape(audio.shape)
+        }
         audio = normalizePeakIfNeeded(audio)
         audio.eval()
 
@@ -159,7 +173,8 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         timestep: Float,
         nextTimestep: Float?,
         conditions: DiTConditions,
-        params: GenerationParams
+        params: GenerationParams,
+        momentumState: inout [String: MLXArray]?
     ) -> MLXArray {
         guard
             let mlxStepper = stepper as? MLXDiTStepper,
@@ -176,7 +191,6 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             )
         }
 
-        var momentumState: [String: MLXArray]? = [:]
         let b = currentLatent.dim(0)
         let t = currentLatent.dim(1)
         let c = currentLatent.dim(2)
@@ -225,6 +239,8 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     private func normalizePeakIfNeeded(_ audio: MLXArray) -> MLXArray {
         guard audio.ndim == 3 else { return audio }
         let peak = MLX.abs(audio).max(axes: [1, 2], keepDims: true)
+        let maxPeak = peak.max().item(Float.self)
+        guard maxPeak > 1.0 else { return audio }
         let safePeak = MLX.where(peak .> 1.0, peak, MLXArray(1.0 as Float))
         return audio / safePeak
     }
@@ -243,20 +259,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         for i in 0..<b {
             let start = i * samplesPerBatch
             let end = start + samplesPerBatch
-            var slice = Array(floats[start..<end])
-            if shape.count > 2 {
-                // Convert NLC flat order to channels-first [C, L] flattened.
-                let length = shape[1]
-                let base = start
-                var channelsFirst: [Float] = []
-                channelsFirst.reserveCapacity(samplesPerBatch)
-                for ch in 0..<channels {
-                    for t in 0..<length {
-                        channelsFirst.append(floats[base + t * channels + ch])
-                    }
-                }
-                slice = channelsFirst
-            }
+            let slice = Array(floats[start..<end])
             result.append([
                 "tensor": slice,
                 "sample_rate": sampleRate,

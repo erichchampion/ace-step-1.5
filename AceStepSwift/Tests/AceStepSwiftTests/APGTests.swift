@@ -53,4 +53,33 @@ final class APGTests: XCTestCase {
         )
         XCTAssertEqual(out.shape, predCond.shape)
     }
+
+    /// Momentum state should persist across steps when caller threads the same dictionary.
+    func testAPGForwardMomentumStatePersistsAcrossCalls() {
+        let predCond = MLXArray((0 ..< 12).map { Float($0) }, [1, 3, 4])
+        let predUncond = MLXArray.zeros([1, 3, 4])
+        var state: [String: MLXArray]? = [:]
+
+        _ = apgForward(
+            predCond: predCond,
+            predUncond: predUncond,
+            guidanceScale: 2.0,
+            momentumState: &state
+        )
+        let firstRunning = state?["running"]
+        XCTAssertNotNil(firstRunning)
+
+        _ = apgForward(
+            predCond: predCond,
+            predUncond: predUncond,
+            guidanceScale: 2.0,
+            momentumState: &state
+        )
+        let secondRunning = state?["running"]
+        XCTAssertNotNil(secondRunning)
+        XCTAssertFalse(
+            secondRunning!.allClose(firstRunning!).all().item(Bool.self),
+            "Running momentum should change after subsequent calls when state is reused."
+        )
+    }
 }
