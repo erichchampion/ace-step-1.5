@@ -96,7 +96,7 @@ final class GenerateMusicAPITests: XCTestCase {
             stepper: FakeDiffusionStepper(),
             decoder: FakeVAEDecoder(),
             sampleRate: AceStepConstants.defaultSampleRate,
-            conditioningProvider: { _ in
+            conditioningProvider: { _, _, _ in
                 DiTConditions(initialLatents: initialLatents)
             }
         )

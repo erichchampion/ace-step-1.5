@@ -23,8 +23,9 @@ public func latentLengthFromDuration(durationSeconds: Double, sampleRate: Int) -
     return max(1, t)
 }
 
-/// Optional provider of DiT conditions from generation params (e.g. condition encoder).
-public typealias ConditioningProvider = (GenerationParams) -> DiTConditions?
+/// Optional provider of DiT conditions. Receives params, latent length T (from duration/sample rate), and sample rate
+/// so it can build context_latents with shape [B, T, 128] matching the diffusion loop. Matches Python prepare_condition.
+public typealias ConditioningProvider = (GenerationParams, _ latentLength: Int, _ sampleRate: Int) -> DiTConditions?
 
 /// Pipeline that runs diffusion loop then VAE decode using injected stepper and decoder.
 public final class ContractGenerationPipeline: GenerationPipeline {
@@ -39,7 +40,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     ///   - stepper: Per-step diffusion (e.g. FakeDiffusionStepper or MLXDiTStepper).
     ///   - decoder: VAE decode latent → audio (e.g. FakeVAEDecoder or MLXVAEDecoder).
     ///   - sampleRate: Output waveform sample rate (default 48000).
-    ///   - conditioningProvider: When non-nil, used to build DiTConditions from params (e.g. caption/lyrics → encoder hidden states + context latents). When nil, empty conditions are used.
+    ///   - conditioningProvider: When non-nil, called with (params, latentLength, sampleRate) to build DiTConditions. Return encoderHiddenStates [B, encL, 2048] and contextLatents [B, latentLength, 128] for meaningful output. When nil, zeros are used and output is not meaningful (matches Python only when real conditioning from prepare_condition is passed).
     public init(
         stepper: DiffusionStepper,
         decoder: VAEDecoder,
@@ -62,7 +63,15 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         )
         progress?(0, "Starting diffusion")
 
-        let conditions = conditioningProvider?(params) ?? DiTConditions()
+        let conditions = conditioningProvider?(params, t, sampleRate) ?? DiTConditions()
+        let usingDefaultConditions = (conditions.encoderHiddenStates == nil && conditions.contextLatents == nil)
+        if usingDefaultConditions {
+            // Python always passes real conditioning from prepare_condition (text/lyric/refer → encoder_hidden_states, context_latents).
+            // Zeros produce unstructured/noise-like audio. App should provide a ConditioningProvider that returns real encoder + context.
+            #if DEBUG
+            debugPrint("[ContractGenerationPipeline] No conditioning provided; using zeros. Output will not be meaningful. Provide a ConditioningProvider that returns encoderHiddenStates [B, encL, 2048] and contextLatents [B, \(t), 128].")
+            #endif
+        }
         let key: MLXArray? = (params.seed >= 0) ? MLXRandom.key(UInt64(params.seed)) : nil
         let noise = MLXRandom.normal([b, t, latentChannels], key: key)
         var xt: MLXArray

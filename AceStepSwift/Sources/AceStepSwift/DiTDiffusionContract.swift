@@ -11,16 +11,20 @@ import MLX
 public struct DiTConditions {
     public var encoderHiddenStates: MLXArray?
     public var contextLatents: MLXArray?
+    /// Null condition embedding [1, 1, D] used for CFG/APG unconditional branch.
+    public var nullConditionEmbedding: MLXArray?
     /// When non-nil, pipeline uses this as the initial latent (e.g. encoded src_audio or repaint base). When nil, starts from noise.
     public var initialLatents: MLXArray?
 
     public init(
         encoderHiddenStates: MLXArray? = nil,
         contextLatents: MLXArray? = nil,
+        nullConditionEmbedding: MLXArray? = nil,
         initialLatents: MLXArray? = nil
     ) {
         self.encoderHiddenStates = encoderHiddenStates
         self.contextLatents = contextLatents
+        self.nullConditionEmbedding = nullConditionEmbedding
         self.initialLatents = initialLatents
     }
 }

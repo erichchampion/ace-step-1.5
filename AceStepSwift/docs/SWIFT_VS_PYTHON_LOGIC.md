@@ -119,12 +119,22 @@ Detailed comparison of the AceStepSwift package against the original Python scri
 
 ---
 
+## 13. Conditioning and “useless” output
+
+- **Python:** Diffusion is always called with real conditioning from `model.prepare_condition(...)`: `encoder_hidden_states` [B, enc_L, 2048] (from text/lyric/refer encoding) and `context_latents` [B, T, 128] (from chunk_masks, src_latents, etc.). These are never zeros in the normal flow.
+- **Swift:** The pipeline calls `conditioningProvider?(params, latentLength, sampleRate) ?? DiTConditions()`. When the provider is nil or returns empty conditions, the stepper uses **zeros** for encoder and context (`MLXArray.zeros([b, 1, 2048])`, `MLXArray.zeros([b, t, 128])`). That produces unstructured / noise-like audio, not meaningful music.
+
+**Fix (done):** (1) `ConditioningProvider` now receives `(params, latentLength, sampleRate)` so the app can build `contextLatents` with shape `[B, T, 128]` matching the diffusion loop. (2) In DEBUG, the pipeline logs when using default zero conditions so the app knows it must provide a real provider. The app must implement a conditioning path (e.g. condition encoder + context builder) equivalent to Python’s `prepare_condition` for meaningful output.
+
+---
+
 ## Summary of issues
 
 | Item | Severity | Description |
 |------|----------|-------------|
-| **MLXDiTStepper `timestep_r`** | **Bug** | Uses `timestep_r = 0` instead of current timestep; second time embedding sees `timestep` instead of `0`, diverging from Python. |
+| **MLXDiTStepper `timestep_r`** | **Fixed** | Was 0; now current timestep so decoder sees 0 for second time embedding (matches Python). |
+| **Conditioning = zeros** | **Critical** | When no `ConditioningProvider` or empty conditions, Swift uses zeros → useless output. Python always passes real conditioning. Provider must return encoder + context; API now passes latentLength and sampleRate. |
 | DiTDecoder/DiTLayer scale_shift transpose | OK | Handles both `[1,2,D]` and `[1,D,2]` (and 6-dim) for checkpoints; logic matches Python. |
 | Snake1d dtype | Minor | Python can upcast to float32 for exp/sin with float16 weights; Swift does not. May matter only for float16. |
 
-Recommendation: fix `timestep_r` in `MLXDiTStepper` so decoder semantics match Python; optionally add tests that compare decoder output for the same (timestep, timestep_r) inputs against Python/MLX.
+Recommendation: Ensure the parent app supplies a `ConditioningProvider` that returns real `encoderHiddenStates` [B, encL, 2048] and `contextLatents` [B, latentLength, 128] (using the passed `latentLength` and `sampleRate`) for meaningful generation.

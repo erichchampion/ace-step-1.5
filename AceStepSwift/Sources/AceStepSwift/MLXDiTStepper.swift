@@ -25,7 +25,13 @@ public final class MLXDiTStepper: DiffusionStepper {
         self.cache = DiTCrossAttentionCache()
     }
 
-    public func step(currentLatent: MLXArray, timestep: Float, conditions: DiTConditions, nextTimestep: Float?) -> MLXArray {
+    /// Predict velocity v_t from current latent and conditions.
+    public func predictVelocity(
+        currentLatent: MLXArray,
+        timestep: Float,
+        conditions: DiTConditions,
+        useCache: Bool
+    ) -> MLXArray {
         let b = currentLatent.dim(0)
         let t = currentLatent.dim(1)
 
@@ -43,6 +49,16 @@ public final class MLXDiTStepper: DiffusionStepper {
             encoderHiddenStates: enc,
             contextLatents: ctx,
             cache: cache,
+            useCache: useCache
+        )
+        return vt
+    }
+
+    public func step(currentLatent: MLXArray, timestep: Float, conditions: DiTConditions, nextTimestep: Float?) -> MLXArray {
+        let vt = predictVelocity(
+            currentLatent: currentLatent,
+            timestep: timestep,
+            conditions: conditions,
             useCache: true
         )
 
