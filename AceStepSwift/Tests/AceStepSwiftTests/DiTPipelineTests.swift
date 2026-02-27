@@ -111,7 +111,14 @@ final class DiTPipelineTests: XCTestCase {
         let pipeline = ContractGenerationPipeline(
             stepper: stepper,
             decoder: FakeVAEDecoder(),
-            sampleRate: AceStepConstants.defaultSampleRate
+            sampleRate: AceStepConstants.defaultSampleRate,
+            conditioningProvider: { params, latentLength, _ in
+                let encL = 8
+                return DiTConditions(
+                    encoderHiddenStates: MLXArray.zeros([1, encL, 2048]),
+                    contextLatents: MLXArray.zeros([1, latentLength, 128])
+                )
+            }
         )
 
         let result = AceStepEngine.generateMusic(
@@ -173,5 +180,78 @@ final class DiTPipelineTests: XCTestCase {
         XCTAssertEqual(out.dim(0), b)
         XCTAssertEqual(out.dim(1), t)
         XCTAssertEqual(out.dim(2), 64)
+    }
+
+    // MARK: - DiTConditions contract (mirrors diffusion_test + lyric_alignment Python contract)
+
+    /// Contract: encoderHiddenStates [B, encL, 2048], contextLatents [B, T, 128]; decoder output [B, T, 64].
+    /// Matches make_test_fixtures and Python diffusion/service expectations.
+    func testDiTConditionsContractShapes() {
+        let b = 2
+        let t = 8
+        let encL = 5
+        let conditions = DiTConditions(
+            encoderHiddenStates: MLXArray.zeros([b, encL, 2048]),
+            contextLatents: MLXArray.zeros([b, t, 128])
+        )
+        XCTAssertEqual(conditions.encoderHiddenStates!.dim(0), b)
+        XCTAssertEqual(conditions.encoderHiddenStates!.dim(1), encL)
+        XCTAssertEqual(conditions.encoderHiddenStates!.dim(2), 2048)
+        XCTAssertEqual(conditions.contextLatents!.dim(0), b)
+        XCTAssertEqual(conditions.contextLatents!.dim(1), t)
+        XCTAssertEqual(conditions.contextLatents!.dim(2), 128)
+
+        let decoder = DiTDecoder(
+            hiddenSize: 2048,
+            intermediateSize: 6144,
+            numHiddenLayers: 2,
+            numAttentionHeads: 16,
+            numKeyValueHeads: 8,
+            headDim: 128,
+            inChannels: 192,
+            audioAcousticHiddenDim: 64,
+            patchSize: 2
+        )
+        let (out, _) = decoder.call(
+            hiddenStates: MLXArray.zeros([b, t, 64]),
+            timestep: MLXArray([Float(0.5), 0.5]),
+            timestepR: MLXArray([Float(0), 0]),
+            encoderHiddenStates: conditions.encoderHiddenStates!,
+            contextLatents: conditions.contextLatents!,
+            cache: nil,
+            useCache: false
+        )
+        XCTAssertEqual(out.dim(0), b)
+        XCTAssertEqual(out.dim(1), t)
+        XCTAssertEqual(out.dim(2), 64)
+    }
+
+    /// Batch dimensions must match: encoder and context same batch size (Python diffusion_test rejects mismatch).
+    func testDiTConditionsBatchDimensionsMatch() {
+        let b = 2
+        let t = 4
+        let encL = 3
+        let enc = MLXArray.zeros([b, encL, 2048])
+        let ctx = MLXArray.zeros([b, t, 128])
+        XCTAssertEqual(enc.dim(0), ctx.dim(0), "Encoder and context must share batch size")
+        let conditions = DiTConditions(encoderHiddenStates: enc, contextLatents: ctx)
+        let stepper = MLXDiTStepper(decoder: DiTDecoder(
+            hiddenSize: 2048,
+            intermediateSize: 6144,
+            numHiddenLayers: 2,
+            numAttentionHeads: 16,
+            numKeyValueHeads: 8,
+            headDim: 128,
+            inChannels: 192,
+            audioAcousticHiddenDim: 64,
+            patchSize: 2
+        ))
+        let next = stepper.step(
+            currentLatent: MLXArray.zeros([b, t, 64]),
+            timestep: 1.0,
+            conditions: conditions,
+            nextTimestep: 0.5
+        )
+        XCTAssertEqual(next.dim(0), b)
     }
 }

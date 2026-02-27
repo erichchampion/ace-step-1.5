@@ -30,3 +30,18 @@ func diTCreateSlidingWindowMask(seqLen: Int, windowSize: Int) -> MLXArray {
     let mask = MLX.where(diff .<= Float(windowSize), zeros, negInf)
     return mask.expandedDimensions(axis: 0).expandedDimensions(axis: 0)
 }
+
+/// Encoder padding mask from [B, L] attention mask (1=valid, 0=padding).
+/// Returns additive mask [B, 1, L, L] where valid keys are 0 and padded keys are -1e9.
+/// This mirrors the Python encoder mask behavior (key masking only).
+func createEncoderPaddingMask(attentionMask: MLXArray) -> MLXArray {
+    let b = attentionMask.dim(0)
+    let l = attentionMask.dim(1)
+    let keyMask = MLX.broadcast(
+        attentionMask.expandedDimensions(axis: 1).expandedDimensions(axis: 1),
+        to: [b, 1, l, l]
+    )
+    let zeros = MLXArray.zeros([b, 1, l, l])
+    let negInf = MLXArray([Float](repeating: -1e9, count: b * l * l), [b, 1, l, l])
+    return MLX.where(keyMask .> 0, zeros, negInf)
+}
