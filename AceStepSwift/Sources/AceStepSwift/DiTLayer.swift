@@ -67,11 +67,24 @@ public class DiTLayer: Module {
         cache: DiTCrossAttentionCache? = nil,
         useCache: Bool = false
     ) -> MLXArray {
-        let tembExpanded = temb.expandedDimensions(axis: 1)
-        let modulation = scaleShiftTable + tembExpanded
-        let parts = split(modulation, parts: 6, axis: 1)
-        let (shiftMsa, scaleMsa, gateMsa) = (parts[0], parts[1], parts[2])
-        let (cShiftMsa, cScaleMsa, cGateMsa) = (parts[3], parts[4], parts[5])
+        // Ensure [1, 6, D]; checkpoint may have [1, D, 6]. temb is timestep_proj [B, 6, D]. Flatten + 1D slice so layout is guaranteed.
+        let table = scaleShiftTable.dim(1) == 6 ? scaleShiftTable : scaleShiftTable.transposed(axes: [0, 2, 1])
+        let modulation = table + temb
+        let b = modulation.dim(0)
+        let d = modulation.dim(2)
+        let flatLen = modulation.dim(0) * modulation.dim(1) * modulation.dim(2)
+        let flat = modulation.reshaped([flatLen])
+        let step = b * d
+        func part(_ i: Int) -> MLXArray {
+            let p = flat[(i * step)..<((i + 1) * step)].reshaped([b, 1, d])
+            return p.dim(1) != 1 ? p.transposed(axes: [0, 2, 1]) : p
+        }
+        let shiftMsa = part(0)
+        let scaleMsa = part(1)
+        let gateMsa = part(2)
+        let cShiftMsa = part(3)
+        let cScaleMsa = part(4)
+        let cGateMsa = part(5)
 
         var h = hiddenStates
         var normed = selfAttnNorm(h)

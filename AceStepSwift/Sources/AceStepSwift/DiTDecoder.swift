@@ -133,11 +133,26 @@ public class DiTDecoder: Module {
             )
         }
 
+        // Output norm: need shift/scale as [B, 1, D] to broadcast with h [B, L, D].
+        let table: MLXArray = scaleShiftTable.dim(2) == 2
+            ? scaleShiftTable.transposed(axes: [0, 2, 1])
+            : scaleShiftTable
         let tembExp = temb.expandedDimensions(axis: 1)
-        let outParts = split(scaleShiftTable + tembExp, parts: 2, axis: 1)
-        h = normOut(h) * (1.0 + outParts[1]) + outParts[0]
+        let combined = table + tembExp
+        let b = h.dim(0)
+        let d = h.dim(2)
+        let flatLen = combined.dim(0) * combined.dim(1) * combined.dim(2)
+        let flat = combined.reshaped([flatLen])
+        var shift = flat[0..<(b * d)].reshaped([b, 1, d])
+        var scale = flat[(b * d)..<(2 * b * d)].reshaped([b, 1, d])
+        if shift.dim(1) != 1 { shift = shift.transposed(axes: [0, 2, 1]) }
+        if scale.dim(1) != 1 { scale = scale.transposed(axes: [0, 2, 1]) }
+        shift.eval()
+        scale.eval()
+        h = normOut(h) * (1.0 + scale) + shift
         h = projOut(h)
-        h = h[.ellipsis, 0..<originalSeqLen, .ellipsis]
+        // Single .ellipsis only in MLX; use explicit ranges for [B, T, C] slice on axis 1.
+        h = h[0..<h.dim(0), 0..<originalSeqLen, 0..<h.dim(2)]
         return (h, cache)
     }
 }

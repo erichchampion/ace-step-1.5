@@ -20,8 +20,27 @@ public class VAESnake1d: Module, UnaryLayer {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let a = logscale ? exp(alpha) : alpha
-        let b = logscale ? exp(beta) : beta
+        let aBase = logscale ? exp(alpha) : alpha
+        let bBase = logscale ? exp(beta) : beta
+        let aCount = (0..<aBase.ndim).reduce(1) { $0 * aBase.dim($1) }
+        let bCount = (0..<bBase.ndim).reduce(1) { $0 * bBase.dim($1) }
+        let aFlat = aBase.reshaped([aCount])
+        let bFlat = bBase.reshaped([bCount])
+
+        // Make channel broadcasting explicit for 3D tensors.
+        // NLC -> [1, 1, C], NCL -> [1, C, 1].
+        let a: MLXArray
+        let b: MLXArray
+        if x.ndim == 3 && aFlat.dim(0) == x.dim(2) && bFlat.dim(0) == x.dim(2) {
+            a = aFlat.reshaped([1, 1, aFlat.dim(0)])
+            b = bFlat.reshaped([1, 1, bFlat.dim(0)])
+        } else if x.ndim == 3 && aFlat.dim(0) == x.dim(1) && bFlat.dim(0) == x.dim(1) {
+            a = aFlat.reshaped([1, aFlat.dim(0), 1])
+            b = bFlat.reshaped([1, bFlat.dim(0), 1])
+        } else {
+            a = aFlat
+            b = bFlat
+        }
         return x + (1 / (b + 1e-9)) * pow(sin(a * x), 2)
     }
 }

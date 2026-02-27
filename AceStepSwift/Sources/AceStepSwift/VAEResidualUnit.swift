@@ -36,7 +36,8 @@ public class VAEResidualUnit: Module, UnaryLayer {
         output = conv2(snake2(output))
         let pad = (hiddenState.dim(1) - output.dim(1)) / 2
         let L = hiddenState.dim(1)
-        let trimmed = pad > 0 ? hiddenState[.ellipsis, pad ..< (L - pad), .ellipsis] : hiddenState
+        // Single .ellipsis only in MLX; use explicit ranges for [B, L, C] slice on axis 1.
+        let trimmed = pad > 0 ? hiddenState[0..<hiddenState.dim(0), pad ..< (L - pad), 0..<hiddenState.dim(2)] : hiddenState
         return trimmed + output
     }
 }

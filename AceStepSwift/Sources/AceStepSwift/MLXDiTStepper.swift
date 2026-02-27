@@ -33,7 +33,8 @@ public final class MLXDiTStepper: DiffusionStepper {
         let ctx = conditions.contextLatents ?? MLXArray.zeros([b, t, ditContextChannels])
 
         let timestepArr = MLXArray([Float](repeating: timestep, count: b))
-        let timestepRArr = MLXArray([Float](repeating: 0, count: b))
+        // Match Python: timestep_r = current timestep so (timestep - timestep_r) = 0 in decoder.
+        let timestepRArr = MLXArray([Float](repeating: timestep, count: b))
 
         let (vt, _) = decoder.call(
             hiddenStates: currentLatent,
