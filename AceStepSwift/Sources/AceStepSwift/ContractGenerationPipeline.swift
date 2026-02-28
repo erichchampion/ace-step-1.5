@@ -57,7 +57,6 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     private let decoder: VAEDecoder
     private let sampleRate: Int
     private let conditioningProvider: ConditioningProvider?
-    private let debugLogPath = "/Users/erich/git/github/erichchampion/cadenza-audio/.cursor/debug-b449ae.log"
 
     public var isInitialized: Bool { true }
 
@@ -169,11 +168,6 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             throw ContractGenerationPipelineError.invalidDecodedAudioShape(audio.shape)
         }
         #if DEBUG
-        // #region agent log
-        appendDebugLog(runId: "pre-fix-1", hypothesisId: "H3", location: "ContractGenerationPipeline.run", message: "Decoded audio tensor shape", data: [
-            "audioShape": audio.shape.map(String.init)
-        ])
-        // #endregion
         if audio.ndim == 3, audio.dim(2) == 2 {
             let b0 = 0..<1
             let t = 0..<audio.dim(1)
@@ -225,6 +219,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         return DiTConditions(
             encoderHiddenStates: try align("encoderHiddenStates", conditions.encoderHiddenStates),
             contextLatents: try align("contextLatents", conditions.contextLatents),
+            encoderAttentionMask: try align("encoderAttentionMask", conditions.encoderAttentionMask),
             nullConditionEmbedding: conditions.nullConditionEmbedding,
             initialLatents: try align("initialLatents", conditions.initialLatents)
         )
@@ -261,9 +256,11 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
         let encDoubled = concatenated([enc, nullExpanded], axis: 0)
         let ctxDoubled = concatenated([ctx, ctx], axis: 0)
+        let maskDoubled: MLXArray? = conditions.encoderAttentionMask.map { concatenated([$0, $0], axis: 0) }
         let cfgConditions = DiTConditions(
             encoderHiddenStates: encDoubled,
             contextLatents: ctxDoubled,
+            encoderAttentionMask: maskDoubled,
             nullConditionEmbedding: nil,
             initialLatents: nil
         )
@@ -378,47 +375,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
                 "sample_rate": sampleRate,
                 "channels": channels
             ] as [String: Any])
-            #if DEBUG
-            // #region agent log
-            appendDebugLog(runId: "pre-fix-1", hypothesisId: "H3", location: "ContractGenerationPipeline.buildAudiosFromDecoded", message: "Output slice stats", data: [
-                "batchIndex": i,
-                "channels": channels,
-                "samplesPerBatch": samplesPerBatch,
-                "shape": shape.map(String.init),
-                "first8": Array(slice.prefix(8))
-            ])
-            // #endregion
-            #endif
         }
         return result
     }
-
-    #if DEBUG
-    private func appendDebugLog(runId: String, hypothesisId: String, location: String, message: String, data: [String: Any]) {
-        let payload: [String: Any] = [
-            "sessionId": "b449ae",
-            "id": UUID().uuidString,
-            "runId": runId,
-            "hypothesisId": hypothesisId,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        guard let json = try? JSONSerialization.data(withJSONObject: payload),
-              var line = String(data: json, encoding: .utf8) else { return }
-        line.append("\n")
-        if let d = line.data(using: .utf8) {
-            let url = URL(fileURLWithPath: debugLogPath)
-            if FileManager.default.fileExists(atPath: debugLogPath),
-               let handle = try? FileHandle(forWritingTo: url) {
-                _ = try? handle.seekToEnd()
-                _ = try? handle.write(contentsOf: d)
-                _ = try? handle.close()
-            } else {
-                _ = try? d.write(to: url)
-            }
-        }
-    }
-    #endif
 }

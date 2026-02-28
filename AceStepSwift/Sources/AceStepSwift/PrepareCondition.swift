@@ -127,9 +127,9 @@ public func prepareCondition(inputs: PrepareConditionInputs, conditionEncoder: C
     }
     let contextLatents = buildContextLatents(srcLatents: srcEffective, chunkMasks: inputs.chunkMasks)
 
-    let encoderHiddenStates: MLXArray? = {
+    let (encoderHiddenStates, encoderAttentionMask): (MLXArray?, MLXArray?) = {
         if let encoder = conditionEncoder, let textHidden = inputs.textHiddenStates {
-            let (enc, _) = encoder.call(
+            let (enc, encMask) = encoder.call(
                 textHiddenStates: textHidden,
                 textAttentionMask: inputs.textAttentionMask,
                 lyricHiddenStates: inputs.lyricHiddenStates,
@@ -137,14 +137,15 @@ public func prepareCondition(inputs: PrepareConditionInputs, conditionEncoder: C
                 referAudioPacked: inputs.referAudioPacked,
                 referAudioOrderMask: inputs.referAudioOrderMask
             )
-            return enc
+            return (enc, encMask)
         }
-        return inputs.precomputedEncoderHiddenStates
+        return (inputs.precomputedEncoderHiddenStates, inputs.precomputedEncoderAttentionMask)
     }()
 
     return DiTConditions(
         encoderHiddenStates: encoderHiddenStates,
         contextLatents: contextLatents,
+        encoderAttentionMask: encoderAttentionMask,
         nullConditionEmbedding: inputs.nullConditionEmbedding,
         initialLatents: inputs.initialLatents
     )

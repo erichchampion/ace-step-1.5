@@ -1,5 +1,6 @@
 /**
  Load model parameters from safetensors into nested structure for Module.update(parameters:).
+ Uses MLX.loadArrays(url:stream:) (from the MLX package) to read safetensors; the MLX dependency must be linked.
  */
 
 import Foundation
@@ -83,4 +84,27 @@ public func loadDiTParametersForDecoder(from url: URL) throws -> ModuleParameter
 public func loadParameters(from url: URL) throws -> ModuleParameters {
     let flat = try loadArrays(url: url)
     return ModuleParameters.unflattened(flat)
+}
+
+/// Load silence latent for text2music from a safetensors file (key "latent", shape [1, T, 64]).
+/// Export from Python: torch.save(latent, "silence_latent.pt") then use a one-off export to save as silence_latent.safetensors with key "latent".
+/// Returns nil if file or key is missing.
+public func loadSilenceLatent(from url: URL) throws -> MLXArray? {
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    let flat = try loadArrays(url: url)
+    guard let latent = flat["latent"] else { return nil }
+    guard latent.ndim == 3, latent.dim(0) >= 1, latent.dim(2) == 64 else { return nil }
+    return latent
+}
+
+/// Extract the DiT checkpoint's learned null condition embedding [1, 1, 2048] for CFG, if present.
+/// Tries keys containing "null_condition_emb" (snake) or "nullConditionEmb" (camel after mapping).
+public func extractNullConditionEmbedding(fromDitWeightsURL url: URL) throws -> MLXArray? {
+    let flat = try loadArrays(url: url)
+    for (key, value) in flat {
+        if key.contains("null_condition_emb") || key.contains("nullConditionEmb") {
+            return value
+        }
+    }
+    return nil
 }

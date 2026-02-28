@@ -151,8 +151,11 @@ public class DiTDecoder: Module {
         scale.eval()
         h = normOut(h) * (1.0 + scale) + shift
         h = projOut(h)
-        // Single .ellipsis only in MLX; use explicit ranges for [B, T, C] slice on axis 1.
-        h = h[0..<h.dim(0), 0..<originalSeqLen, 0..<h.dim(2)]
+        // Trim padding from axis 1. Only use 3D subscript when ndim == 3 to avoid MLX getItemND
+        // out-of-bounds (starts[axis]) when run on concurrent queues with unexpected shapes.
+        if h.ndim == 3, h.dim(1) > originalSeqLen {
+            h = h[0..<h.dim(0), 0..<originalSeqLen, 0..<h.dim(2)]
+        }
         return (h, cache)
     }
 }

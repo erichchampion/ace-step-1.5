@@ -1,5 +1,7 @@
 /**
  SwiGLU MLP: down_proj(silu(gate_proj(x)) * up_proj(x)). Mirrors dit_model.MLXSwiGLUMLP.
+ Uses inline SiLU (gate * sigmoid(gate)) to avoid MLXNN's compiled silu path, which can
+ crash when the MLX compile closure is invoked with empty tracers on concurrent queues.
  */
 
 import Foundation
@@ -19,6 +21,8 @@ public class DiTSwiGLUMLP: Module {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        downProj(silu(gateProj(x)) * upProj(x))
+        let gate = gateProj(x)
+        let siluGate = gate * MLX.sigmoid(gate)
+        return downProj(siluGate * upProj(x))
     }
 }

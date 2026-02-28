@@ -11,6 +11,8 @@ import MLX
 public struct DiTConditions {
     public var encoderHiddenStates: MLXArray?
     public var contextLatents: MLXArray?
+    /// Encoder attention mask [B, encL] for cross-attention (1 = valid, 0 = pad). Optional; when nil no padding mask is applied.
+    public var encoderAttentionMask: MLXArray?
     /// Null condition embedding [1, 1, D] used for CFG/APG unconditional branch.
     public var nullConditionEmbedding: MLXArray?
     /// When non-nil, pipeline uses this as the initial latent (e.g. encoded src_audio or repaint base). When nil, starts from noise.
@@ -19,11 +21,13 @@ public struct DiTConditions {
     public init(
         encoderHiddenStates: MLXArray? = nil,
         contextLatents: MLXArray? = nil,
+        encoderAttentionMask: MLXArray? = nil,
         nullConditionEmbedding: MLXArray? = nil,
         initialLatents: MLXArray? = nil
     ) {
         self.encoderHiddenStates = encoderHiddenStates
         self.contextLatents = contextLatents
+        self.encoderAttentionMask = encoderAttentionMask
         self.nullConditionEmbedding = nullConditionEmbedding
         self.initialLatents = initialLatents
     }

@@ -1,5 +1,6 @@
 /**
  Rotary and mask helpers for DiT attention. Mirrors dit_model _rotate_half, _apply_rotary_pos_emb, _create_sliding_window_mask.
+ Uses reshape + 2D slice only to avoid MLX .ellipsis indexing, which can assert when run on concurrent queues.
  */
 
 import Foundation
@@ -7,11 +8,19 @@ import MLX
 
 /// Rotate last dimension by splitting in half and swapping with negation. x: [..., head_dim].
 func diTRotateHalf(_ x: MLXArray) -> MLXArray {
-    let headDim = x.dim(x.ndim - 1)
+    let ndim = x.ndim
+    guard ndim >= 2 else { return x }
+    let headDim = x.dim(ndim - 1)
     let half = headDim / 2
-    let x1 = x[.ellipsis, 0..<half]
-    let x2 = x[.ellipsis, half..<headDim]
-    return concatenated([-x2, x1], axis: x.ndim - 1)
+    // Compute rest from shape to avoid invalid range when ndim < 2 and possible overflow in reduce
+    let shape = x.shape
+    let rest = shape.prefix(ndim - 1).reduce(1, *)
+    let flat = x.reshaped([rest, headDim])
+    let x1 = flat[0..<rest, 0..<half]
+    let x2 = flat[0..<rest, half..<headDim]
+    let rotated = concatenated([-x2, x1], axis: 1)
+    let origShape = (0..<ndim).map { x.dim($0) }
+    return rotated.reshaped(origShape)
 }
 
 /// Apply RoPE to Q,K. q,k: [B, n_heads, L, head_dim]; cos, sin: [1, 1, L, head_dim].

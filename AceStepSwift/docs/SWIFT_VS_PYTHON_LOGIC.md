@@ -128,12 +128,23 @@ Detailed comparison of the AceStepSwift package against the original Python scri
 
 ---
 
+## 14. Lyric conditioning (text vs lyric branch)
+
+- **Python** (`conditioning_embed.py`, `modeling_acestep_v15_base.py`): **Text branch:** `infer_text_embeddings(text_token_idss)` → `text_encoder(input_ids=...).last_hidden_state` (full forward). **Lyric branch:** `infer_lyric_embeddings(lyric_token_ids)` → `text_encoder.embed_tokens(lyric_token_ids)` (raw token embeddings only, no transformer layers). The condition encoder’s `lyric_encoder` was trained on `inputs_embeds` from embed_tokens.
+- **Swift:** **Text branch:** `QwenTextHiddenStateProvider.encodeHiddenStates` → Qwen model forward → last hidden state. **Matches Python.** **Lyric branch:** When `LyricTokenEmbeddingLoader` is available (embedding matrix loaded from the same Qwen checkpoint via `LyricTokenEmbeddingLoader.load(fromDirectory:)`), `QwenTextHiddenStateProvider.encodeTokenEmbeddings` uses that loader to return **token embeddings** (embed lookup only), matching Python. When the loader is not available (e.g. LM loaded by ID without a directory, or embedding key not found in checkpoint), Swift falls back to last hidden state for lyrics; that is a distribution mismatch and may reduce lyric-conditioning quality.
+
+**Recommendation:** Use a local Qwen checkpoint directory so `QwenTextHiddenStateProvider.load(directory:)` can load the lyric embedding matrix from the same `model.safetensors`; then lyric conditioning matches Python.
+
+---
+
 ## Summary of issues
 
 | Item | Severity | Description |
 |------|----------|-------------|
 | **MLXDiTStepper `timestep_r`** | **Fixed** | Was 0; now current timestep so decoder sees 0 for second time embedding (matches Python). |
+| **Encoder attention mask** | **Fixed** | `DiTConditions` now has optional `encoderAttentionMask`; it is passed through the pipeline and into DiT cross-attention (matches Python when encoder sequences are padded). |
 | **Conditioning = zeros** | **Critical** | When no `ConditioningProvider` or empty conditions, Swift uses zeros → useless output. Python always passes real conditioning. Provider must return encoder + context; API now passes latentLength and sampleRate. |
+| **Lyric = embed_tokens** | **Addressed** | Python uses embed_tokens for lyrics; Swift uses `LyricTokenEmbeddingLoader` when the Qwen checkpoint is loaded from a directory (same weights). Fallback: last_hidden_state when loader unavailable. |
 | DiTDecoder/DiTLayer scale_shift transpose | OK | Handles both `[1,2,D]` and `[1,D,2]` (and 6-dim) for checkpoints; logic matches Python. |
 | Snake1d dtype | Minor | Python can upcast to float32 for exp/sin with float16 weights; Swift does not. May matter only for float16. |
 
