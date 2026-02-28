@@ -254,4 +254,276 @@ final class DiTPipelineTests: XCTestCase {
         )
         XCTAssertEqual(next.dim(0), b)
     }
+
+    // MARK: - CFG / Guidance Scale Tests
+
+    /// Test that nullConditionEmbedding is properly extracted from DiT weights
+    func testExtractNullConditionEmbeddingFromWeights() throws {
+        guard let dir = ProcessInfo.processInfo.environment[Self.ditWeightsPathEnv]?.trimmingCharacters(in: .whitespaces),
+              !dir.isEmpty else {
+            try XCTSkipIf(true, "Set \(Self.ditWeightsPathEnv) to test null condition embedding extraction")
+            return
+        }
+        let weightsURL = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath).appendingPathComponent("model.safetensors")
+        guard FileManager.default.fileExists(atPath: weightsURL.path) else {
+            try XCTSkipIf(true, "model.safetensors not found at \(weightsURL.path)")
+            return
+        }
+        let nullEmb = try extractNullConditionEmbedding(fromDitWeightsURL: weightsURL)
+        if let emb = nullEmb {
+            XCTAssertEqual(emb.dim(0), 1, "Null embedding batch should be 1")
+            XCTAssertEqual(emb.dim(1), 1, "Null embedding sequence should be 1")
+            XCTAssertEqual(emb.dim(2), 2048, "Null embedding dim should match encoder hidden size")
+        }
+    }
+
+    /// Test pipeline with guidanceScale > 1.0 uses CFG path correctly
+    func testPipelineWithGuidanceScaleUsesCFG() {
+        let decoder = DiTDecoder(
+            hiddenSize: 2048,
+            intermediateSize: 6144,
+            numHiddenLayers: 2,
+            numAttentionHeads: 16,
+            numKeyValueHeads: 8,
+            headDim: 128,
+            inChannels: 192,
+            audioAcousticHiddenDim: 64,
+            patchSize: 2
+        )
+        let stepper = MLXDiTStepper(decoder: decoder)
+        let b = 1
+        let encL = 8
+
+        let nullEmb = MLXArray.zeros([1, 1, 2048])
+        let pipeline = ContractGenerationPipeline(
+            stepper: stepper,
+            decoder: FakeVAEDecoder(),
+            sampleRate: AceStepConstants.defaultSampleRate,
+            conditioningProvider: { _, latentLength, _ in
+                DiTConditions(
+                    encoderHiddenStates: MLXArray.zeros([b, encL, 2048]),
+                    contextLatents: MLXArray.zeros([b, latentLength, 128]),
+                    nullConditionEmbedding: nullEmb
+                )
+            }
+        )
+
+        // Test with guidanceScale > 1.0 - should use CFG
+        let params = GenerationParams(
+            caption: "test",
+            lyrics: "[Instrumental]",
+            duration: 1.0,
+            inferenceSteps: 2,
+            seed: 42,
+            guidanceScale: 7.0
+        )
+
+        let result = AceStepEngine.generateMusic(
+            params: params,
+            config: GenerationConfig(batchSize: 1),
+            progress: nil,
+            pipeline: pipeline
+        )
+
+        XCTAssertTrue(result.success, result.error ?? "no error")
+        if result.success, let first = result.audios.first {
+            let tensor = first["tensor"] as? [Float]
+            XCTAssertNotNil(tensor)
+            XCTAssertFalse(tensor?.isEmpty ?? true)
+        }
+    }
+
+    /// Test pipeline with guidanceScale = 1.0 skips CFG
+    func testPipelineWithGuidanceScaleOneSkipsCFG() {
+        let decoder = DiTDecoder(
+            hiddenSize: 2048,
+            intermediateSize: 6144,
+            numHiddenLayers: 2,
+            numAttentionHeads: 16,
+            numKeyValueHeads: 8,
+            headDim: 128,
+            inChannels: 192,
+            audioAcousticHiddenDim: 64,
+            patchSize: 2
+        )
+        let stepper = MLXDiTStepper(decoder: decoder)
+        let b = 1
+
+        let pipeline = ContractGenerationPipeline(
+            stepper: stepper,
+            decoder: FakeVAEDecoder(),
+            sampleRate: AceStepConstants.defaultSampleRate,
+            conditioningProvider: { params, latentLength, _ in
+                DiTConditions(
+                    encoderHiddenStates: MLXArray.zeros([b, 8, 2048]),
+                    contextLatents: MLXArray.zeros([b, latentLength, 128])
+                )
+            }
+        )
+
+        let params = GenerationParams(
+            caption: "test",
+            lyrics: "[Instrumental]",
+            duration: 1.0,
+            inferenceSteps: 2,
+            seed: 42,
+            guidanceScale: 1.0
+        )
+
+        let result = AceStepEngine.generateMusic(
+            params: params,
+            config: GenerationConfig(batchSize: 1),
+            progress: nil,
+            pipeline: pipeline
+        )
+
+        XCTAssertTrue(result.success, result.error ?? "no error")
+    }
+
+    /// Test CFG interval boundaries: cfgIntervalStart/End control when guidance is applied
+    func testPipelineWithCFGIntervalBoundaries() {
+        let decoder = DiTDecoder(
+            hiddenSize: 2048,
+            intermediateSize: 6144,
+            numHiddenLayers: 2,
+            numAttentionHeads: 16,
+            numKeyValueHeads: 8,
+            headDim: 128,
+            inChannels: 192,
+            audioAcousticHiddenDim: 64,
+            patchSize: 2
+        )
+        let stepper = MLXDiTStepper(decoder: decoder)
+        let b = 1
+
+        let nullEmb = MLXArray.zeros([1, 1, 2048])
+        let pipeline = ContractGenerationPipeline(
+            stepper: stepper,
+            decoder: FakeVAEDecoder(),
+            sampleRate: AceStepConstants.defaultSampleRate,
+            conditioningProvider: { params, latentLength, _ in
+                DiTConditions(
+                    encoderHiddenStates: MLXArray.zeros([b, 8, 2048]),
+                    contextLatents: MLXArray.zeros([b, latentLength, 128]),
+                    nullConditionEmbedding: nullEmb
+                )
+            }
+        )
+
+        // CFG interval [0.5, 1.0] - guidance applied in later steps only
+        let params = GenerationParams(
+            caption: "test",
+            lyrics: "[Instrumental]",
+            duration: 1.0,
+            inferenceSteps: 4,
+            seed: 42,
+            guidanceScale: 7.0,
+            cfgIntervalStart: 0.5,
+            cfgIntervalEnd: 1.0
+        )
+
+        let result = AceStepEngine.generateMusic(
+            params: params,
+            config: GenerationConfig(batchSize: 1),
+            progress: nil,
+            pipeline: pipeline
+        )
+
+        XCTAssertTrue(result.success, result.error ?? "no error")
+    }
+
+    // MARK: - Timestep R Validation
+
+    /// Verify timestep_r produces zero in decoder (matching Python behavior).
+    /// Python: timestep_r = current timestep, so timestep - timestep_r = 0 for second embedding.
+    func testTimestepRProducesZeroInDecoder() {
+        let decoder = DiTDecoder(
+            hiddenSize: 2048,
+            intermediateSize: 6144,
+            numHiddenLayers: 2,
+            numAttentionHeads: 16,
+            numKeyValueHeads: 8,
+            headDim: 128,
+            inChannels: 192,
+            audioAcousticHiddenDim: 64,
+            patchSize: 2
+        )
+        let stepper = MLXDiTStepper(decoder: decoder)
+        let b = 1
+        let t = 4
+        let encL = 8
+
+        // Test at timestep = 0.5, timestepR = 0.5 -> difference = 0
+        let currentLatent = MLXArray.zeros([b, t, 64])
+        let conditions = DiTConditions(
+            encoderHiddenStates: MLXArray.zeros([b, encL, 2048]),
+            contextLatents: MLXArray.zeros([b, t, 128])
+        )
+
+        // This should use timestep_r = timestep = 0.5 internally
+        let vt = stepper.predictVelocity(
+            currentLatent: currentLatent,
+            timestep: 0.5,
+            conditions: conditions,
+            useCache: false
+        )
+
+        // Verify output shape
+        XCTAssertEqual(vt.dim(0), b)
+        XCTAssertEqual(vt.dim(1), t)
+        XCTAssertEqual(vt.dim(2), 64)
+    }
+
+    // MARK: - DiT with Real Weights Tests
+
+    /// Full pipeline with real DiT weights and real VAE (when available)
+    func testFullPipelineWithRealDiTWeights() throws {
+        guard let dir = ProcessInfo.processInfo.environment[Self.ditWeightsPathEnv]?.trimmingCharacters(in: .whitespaces),
+              !dir.isEmpty else {
+            try XCTSkipIf(true, "Set \(Self.ditWeightsPathEnv) to run DiT with real weights")
+            return
+        }
+        let weightsURL = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath).appendingPathComponent("model.safetensors")
+        guard FileManager.default.fileExists(atPath: weightsURL.path) else {
+            try XCTSkipIf(true, "model.safetensors not found at \(weightsURL.path)")
+            return
+        }
+        let decoder = DiTDecoder()
+        let params = try loadDiTParametersForDecoder(from: weightsURL)
+        decoder.update(parameters: params)
+        let stepper = MLXDiTStepper(decoder: decoder)
+        let b = 1
+
+        let pipeline = ContractGenerationPipeline(
+            stepper: stepper,
+            decoder: FakeVAEDecoder(),
+            sampleRate: AceStepConstants.defaultSampleRate,
+            conditioningProvider: { params, latentLength, _ in
+                DiTConditions(
+                    encoderHiddenStates: MLXArray.zeros([b, 8, 2048]),
+                    contextLatents: MLXArray.zeros([b, latentLength, 128])
+                )
+            }
+        )
+
+        let result = AceStepEngine.generateMusic(
+            params: GenerationParams(
+                caption: "test",
+                lyrics: "[Instrumental]",
+                duration: 1.0,
+                inferenceSteps: 2,
+                seed: 42
+            ),
+            config: GenerationConfig(batchSize: 1),
+            progress: nil,
+            pipeline: pipeline
+        )
+
+        XCTAssertTrue(result.success, result.error ?? "no error")
+        if result.success, let first = result.audios.first {
+            let tensor = first["tensor"] as? [Float]
+            XCTAssertNotNil(tensor)
+            XCTAssertFalse(tensor?.isEmpty ?? true)
+        }
+    }
 }

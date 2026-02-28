@@ -20,8 +20,18 @@ public class VAESnake1d: Module, UnaryLayer {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let aBase = logscale ? exp(alpha) : alpha
-        let bBase = logscale ? exp(beta) : beta
+        // Upcast to float32 for exp/sin/power to prevent overflow with float16
+        // weights (exp overflows float16 at alpha > ~11). This matches Python
+        // vae_model.py MLXSnake1d implementation.
+        let aBase: MLXArray
+        let bBase: MLXArray
+        if logscale {
+            aBase = exp(alpha.asType(.float32))
+            bBase = exp(beta.asType(.float32))
+        } else {
+            aBase = alpha.asType(.float32)
+            bBase = beta.asType(.float32)
+        }
         let aCount = (0..<aBase.ndim).reduce(1) { $0 * aBase.dim($1) }
         let bCount = (0..<bBase.ndim).reduce(1) { $0 * bBase.dim($1) }
         let aFlat = aBase.reshaped([aCount])
@@ -41,6 +51,10 @@ public class VAESnake1d: Module, UnaryLayer {
             a = aFlat
             b = bFlat
         }
-        return x + (1 / (b + 1e-9)) * pow(sin(a * x), 2)
+
+        // Compute in float32 for numerical stability, then cast back
+        let xF32 = x.asType(.float32)
+        let resultF32 = xF32 + (1 / (b + 1e-9)) * pow(sin(a * xF32), 2)
+        return resultF32.asType(x.dtype)
     }
 }
