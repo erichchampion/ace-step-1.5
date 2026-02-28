@@ -96,7 +96,7 @@ The Python codebase (under `acestep/`) provides the reference implementation: au
 - **loadDiTParameters(from: url):** Loads flat arrays from URL (via `loadArrays(url:)`), normalizes PyTorch Sequential keys (`proj_in.1.*` → `proj_in.*`, `proj_out.1.*` → `proj_out.*`), maps snake_case to camelCase (`diTParameterKeyToSwift`), and converts Conv/ConvTranspose1d weights from PyTorch layout to MLX (Conv1d `[out,in,K]` → `[out,K,in]`; ConvTranspose1d `[in,out,K]` → `[out,K,in]`). Returns `ModuleParameters.unflattened(remapped)` for `decoder.update(parameters:)`.
 - **loadDiTParametersForDecoder(from: url):** Calls `loadDiTParameters`, flattens, keeps keys with prefix `"decoder."`, strips that prefix, unflattens. Used when the checkpoint is the full model (e.g. HuggingFace-style with `decoder.*`). If no key has that prefix, returns the full parameters (decoder-only checkpoint).
 - **loadParameters(from: url):** Generic loader; no key or weight conversion.
-- **Dependency:** `loadArrays(url:)` is called but not defined in this repository. It must load a safetensors (or compatible) file and return a flat `[(String, MLXArray)]` or equivalent; the implementation may come from an MLX or MLXLMCommon extension. See [Section 6](#6-review-findings-and-possible-bugs).
+- **Dependency:** `loadDiTParameters(from:)` and `loadParameters(from:)` call **MLX**’s `loadArrays(url:stream:)` (from the mlx-swift package), which reads safetensors and returns `[String: MLXArray]`. The AceStepSwift target depends on MLX, so no extra implementation is required. See [Section 6](#6-review-findings-and-possible-bugs) for historical note.
 
 ### 3.5 Conditioning contract
 
@@ -205,6 +205,7 @@ let pipeline = ContractGenerationPipeline(
 - **Conditioning:** Implement `ConditioningProvider` so that it returns `DiTConditions` with:
   - `encoderHiddenStates`: shape `[B, encL, 2048]`
   - `contextLatents`: shape `[B, latentLength, 128]`
+  - (optional) `encoderAttentionMask`: shape `[B, encL]` for cross-attention padding when encoder sequences are variable-length.
 
   Either:
   - Call `prepareCondition(inputs:conditionEncoder:)` with text/lyric/source inputs and a `ConditionEncoder` (and e.g. `QwenTextHiddenStateProvider`), or
@@ -240,9 +241,11 @@ Findings from reviewing the Swift code for parity with Python and for library ro
 
 | Finding | Location | Severity | Notes |
 |--------|----------|----------|--------|
-| **Hardcoded debug log path** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) (~line 61, 414) | Medium | `debugLogPath` is set to a user- and machine-specific path (e.g. `.../cadenza-audio/.cursor/debug-b449ae.log`). For a reusable library this should be configurable or removed. |
-| **`loadArrays(url:)` undefined in repo** | [WeightLoading.swift](../Sources/AceStepSwift/WeightLoading.swift) (lines 53, 84) | Medium | Public `loadDiTParameters` and `loadParameters` call `loadArrays(url: url)`, which is not defined in AceStepSwift. The implementation is likely provided by an MLX or MLXLMCommon dependency. Document the requirement; if builds or tests fail on a fresh clone, add a local implementation or an explicit dependency. |
+| **Hardcoded debug log path** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Resolved | File logging to a fixed path was removed; the library no longer writes debug logs to disk. Use `debugPrint` in DEBUG builds only. |
+| **`loadArrays` dependency** | [WeightLoading.swift](../Sources/AceStepSwift/WeightLoading.swift) (lines 53, 84) | Resolved | `loadDiTParameters` and `loadParameters` use **MLX**’s `loadArrays(url:stream:)` (mlx-swift package) to read safetensors. The AceStepSwift target already depends on MLX; no in-repo implementation is required. |
 | **timestep_r semantics** | [SWIFT_VS_PYTHON_LOGIC.md](SWIFT_VS_PYTHON_LOGIC.md) §8 | Resolved | Previously `MLXDiTStepper` passed 0 for `timestep_r`, so the second time embedding saw the full timestep instead of 0. This is fixed: the stepper now passes the current timestep for both `timestep` and `timestep_r`, so the decoder sees `timestep - timestep_r = 0` for the second embedding, matching Python. |
-| **Zero conditioning** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Documented | When no `ConditioningProvider` is supplied or it returns empty conditions, the pipeline uses zeros for encoder and context. With `MLXDiTStepper` it throws; with a fake stepper it runs but output is not meaningful. Real generation requires a provider that returns encoder hidden states [B, encL, 2048] and context latents [B, T, 128]. See [SWIFT_VS_PYTHON_LOGIC.md](SWIFT_VS_PYTHON_LOGIC.md) §13. |
+| **Encoder attention mask** | [DiTDiffusionContract.swift](../Sources/AceStepSwift/DiTDiffusionContract.swift), DiTDecoder, DiTLayer | Resolved | `DiTConditions` now includes optional `encoderAttentionMask` [B, encL]; it is threaded through the pipeline, CFG path, stepper, and decoder into cross-attention so Swift matches Python when encoder sequences are padded. |
+| **Zero conditioning** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Documented | When no `ConditioningProvider` is supplied or it returns empty conditions, the pipeline uses zeros for encoder and context. With `MLXDiTStepper` it throws; with a fake stepper it runs but output is not meaningful. Real generation requires a provider that returns encoder hidden states [B, encL, 2048], context latents [B, T, 128], and optionally `encoderAttentionMask` [B, encL]. See [SWIFT_VS_PYTHON_LOGIC.md](SWIFT_VS_PYTHON_LOGIC.md) §13. |
+| **Snake1d dtype** | [VAESnake1d](../Sources/AceStepSwift/VAESnake1d.swift) | Minor | Swift does not special-case float32 upcast for exp/sin when weights are float16; Python may. Effect is minor for typical float32 VAE. |
 
 For a detailed logic-by-logic comparison of Swift and Python (DiT, VAE, schedule, conditioning), see [SWIFT_VS_PYTHON_LOGIC.md](SWIFT_VS_PYTHON_LOGIC.md). For DiT port status and weight-loading notes, see [DIT_PORT_STATUS.md](DIT_PORT_STATUS.md).

@@ -133,6 +133,7 @@ Detailed comparison of the AceStepSwift package against the original Python scri
 | Item | Severity | Description |
 |------|----------|-------------|
 | **MLXDiTStepper `timestep_r`** | **Fixed** | Was 0; now current timestep so decoder sees 0 for second time embedding (matches Python). |
+| **Encoder attention mask** | **Fixed** | `DiTConditions` now has optional `encoderAttentionMask`; it is passed through the pipeline and into DiT cross-attention (matches Python when encoder sequences are padded). |
 | **Conditioning = zeros** | **Critical** | When no `ConditioningProvider` or empty conditions, Swift uses zeros → useless output. Python always passes real conditioning. Provider must return encoder + context; API now passes latentLength and sampleRate. |
 | DiTDecoder/DiTLayer scale_shift transpose | OK | Handles both `[1,2,D]` and `[1,D,2]` (and 6-dim) for checkpoints; logic matches Python. |
 | Snake1d dtype | Minor | Python can upcast to float32 for exp/sin with float16 weights; Swift does not. May matter only for float16. |

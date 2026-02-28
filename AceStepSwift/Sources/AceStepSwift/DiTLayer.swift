@@ -92,7 +92,7 @@ public class DiTLayer: Module {
         h = h + selfAttn.call(hiddenStates: normed, positionCosSin: positionCosSin, attentionMask: selfAttnMask) * gateMsa
 
         normed = crossAttnNorm(h)
-        h = h + crossAttn.call(hiddenStates: normed, encoderHiddenStates: encoderHiddenStates, cache: cache, useCache: useCache)
+        h = h + crossAttn.call(hiddenStates: normed, attentionMask: encoderAttentionMask, encoderHiddenStates: encoderHiddenStates, cache: cache, useCache: useCache)
 
         normed = mlpNorm(h)
         normed = normed * (1.0 + cScaleMsa) + cShiftMsa

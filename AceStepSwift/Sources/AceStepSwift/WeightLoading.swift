@@ -1,5 +1,6 @@
 /**
  Load model parameters from safetensors into nested structure for Module.update(parameters:).
+ Uses MLX.loadArrays(url:stream:) (from the MLX package) to read safetensors; the MLX dependency must be linked.
  */
 
 import Foundation
