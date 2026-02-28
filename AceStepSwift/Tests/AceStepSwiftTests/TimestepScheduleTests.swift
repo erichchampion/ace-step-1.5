@@ -26,13 +26,26 @@ final class TimestepScheduleTests: XCTestCase {
 
     func testShift3LegacySchedule() {
         let schedule = DiffusionSchedule.getTimestepSchedule(shift: 3.0, timesteps: nil, inferSteps: nil)
-        let expected: [Double] = [
-            1.0, 0.9545454545454546, 0.9, 0.8333333333333334, 0.75,
-            0.6428571428571429, 0.5, 0.3
-        ]
+        let expected = Self.pythonShift3Timesteps
         XCTAssertEqual(schedule.count, expected.count)
         for (i, e) in expected.enumerated() {
             XCTAssertEqual(schedule[i], e, accuracy: 1e-10, "index \(i)")
+        }
+    }
+
+    /// Python SHIFT_TIMESTEPS[3.0] from modeling_acestep_v15_turbo.py / dit_generate.py (parity check).
+    private static let pythonShift3Timesteps: [Double] = [
+        1.0, 0.9545454545454546, 0.9, 0.8333333333333334, 0.75,
+        0.6428571428571429, 0.5, 0.3
+    ]
+
+    /// When inferSteps=8 and shift=3.0, formula-produced schedule must match Python turbo 8-step list (parity with dit_generate.py).
+    func testShift3InferSteps8MatchesPythonTurboSchedule() {
+        let schedule = DiffusionSchedule.getTimestepSchedule(shift: 3.0, timesteps: nil, inferSteps: 8)
+        let expected = Self.pythonShift3Timesteps
+        XCTAssertEqual(schedule.count, expected.count, "Schedule length should match Python SHIFT_TIMESTEPS[3.0]")
+        for (i, e) in expected.enumerated() {
+            XCTAssertEqual(schedule[i], e, accuracy: 1e-10, "index \(i) should match Python turbo schedule")
         }
     }
 

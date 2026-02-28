@@ -86,6 +86,11 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             timesteps: params.timesteps,
             inferSteps: params.inferenceSteps > 0 ? params.inferenceSteps : nil
         )
+        #if DEBUG
+        if let firstT = schedule.first, let lastT = schedule.last {
+            debugPrint("[GenerationDiagnostics] timestep_schedule count=\(schedule.count) first=\(formatStat(Float(firstT))) last=\(formatStat(Float(lastT)))")
+        }
+        #endif
         progress?(0, "Starting diffusion")
 
         var conditions = conditioningProvider?(params, t, sampleRate) ?? DiTConditions()
@@ -156,6 +161,9 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         guard decodeLatent.ndim == 3, decodeLatent.dim(2) == latentChannels else {
             throw ContractGenerationPipelineError.invalidLatentShape(decodeLatent.shape)
         }
+        #if DEBUG
+        debugPrint("[GenerationDiagnostics] decode_latent shape=\(decodeLatent.shape)")
+        #endif
         var audio = decoder.decode(latent: decodeLatent)
         guard audio.ndim == 2 || audio.ndim == 3 else {
             throw ContractGenerationPipelineError.invalidDecodedAudioShape(audio.shape)
@@ -184,7 +192,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         let audioStats = tensorMeanStd(audio)
         let audioPeak = MLX.abs(audio).max().item(Float.self)
         debugPrint(
-            "[GenerationDiagnostics] final_audio peak=\(formatStat(audioPeak)) mean=\(formatStat(audioStats.mean)) std=\(formatStat(audioStats.std))"
+            "[GenerationDiagnostics] final_audio shape=\(audio.shape) peak=\(formatStat(audioPeak)) mean=\(formatStat(audioStats.mean)) std=\(formatStat(audioStats.std))"
         )
         #endif
         audio.eval()
@@ -290,9 +298,16 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         }
     }
 
+    /// Peak-normalize to at most 1.0 when any value exceeds 1.0 (matches Python generate_music_decode). Handles 2D [B, samples] and 3D [B, L, C].
     private func normalizePeakIfNeeded(_ audio: MLXArray) -> MLXArray {
-        guard audio.ndim == 3 else { return audio }
-        let peak = MLX.abs(audio).max(axes: [1, 2], keepDims: true)
+        let peak: MLXArray
+        if audio.ndim == 3 {
+            peak = MLX.abs(audio).max(axes: [1, 2], keepDims: true)
+        } else if audio.ndim == 2 {
+            peak = MLX.abs(audio).max(axes: [1], keepDims: true)
+        } else {
+            return audio
+        }
         let maxPeak = peak.max().item(Float.self)
         guard maxPeak > 1.0 else { return audio }
         let safePeak = MLX.where(peak .> 1.0, peak, MLXArray(1.0 as Float))
@@ -397,11 +412,11 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             let url = URL(fileURLWithPath: debugLogPath)
             if FileManager.default.fileExists(atPath: debugLogPath),
                let handle = try? FileHandle(forWritingTo: url) {
-                try? handle.seekToEnd()
-                try? handle.write(contentsOf: d)
-                try? handle.close()
+                _ = try? handle.seekToEnd()
+                _ = try? handle.write(contentsOf: d)
+                _ = try? handle.close()
             } else {
-                try? d.write(to: url)
+                _ = try? d.write(to: url)
             }
         }
     }
