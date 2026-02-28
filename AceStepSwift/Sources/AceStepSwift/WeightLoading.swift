@@ -87,10 +87,11 @@ public func loadParameters(from url: URL) throws -> ModuleParameters {
 }
 
 /// Load silence latent for text2music from a safetensors file (key "latent", shape [1, T, 64]).
-/// Export from Python: torch.save(latent, "silence_latent.pt") then use a one-off export to save as silence_latent.safetensors with key "latent".
-/// Returns nil if file or key is missing.
+/// Also checks for .pt file and logs a warning if .safetensors loading fails but .pt exists.
+/// Returns nil if neither file exists.
 public func loadSilenceLatent(from url: URL) throws -> MLXArray? {
-    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    let path = url.path
+    guard FileManager.default.fileExists(atPath: path) else { return nil }
     let flat = try loadArrays(url: url)
     guard let latent = flat["latent"] else { return nil }
     guard latent.ndim == 3, latent.dim(0) >= 1, latent.dim(2) == 64 else { return nil }

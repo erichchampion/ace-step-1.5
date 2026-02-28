@@ -5,7 +5,7 @@
  Uses real DiT when DIT_WEIGHTS_PATH points to a checkpoint dir containing
  model.safetensors. Uses real VAE when VAE_WEIGHTS_PATH points to decoder
  safetensors. Uses precomputed conditioning when CONDITIONING_DIR is set.
- Otherwise uses unloaded DiT / FakeVAEDecoder / zeros (output not meaningful).
+ Loads silence_latent from checkpoint directory for source latents.
  */
 
 import XCTest
@@ -21,6 +21,33 @@ final class GenerationSmokeTests: XCTestCase {
     private static let vaeWeightsPathEnv = "VAE_WEIGHTS_PATH"
     /// Directory containing precomputed conditioning (encoder_hidden_states.bin, context_latents.bin). When set, use instead of zeros.
     private static let conditioningDirEnv = "CONDITIONING_DIR"
+
+    /// Loaded silence latent from DiT checkpoint for source latents (text2music requires this for meaningful output).
+    private static var loadedSilenceLatent: MLXArray?
+
+    /// Initialize silence latent from DIT_WEIGHTS_PATH when available.
+    private static func initializeSilenceLatent() {
+        let pathEnv = ProcessInfo.processInfo.environment[Self.ditWeightsPathEnv]
+            ?? ProcessInfo.processInfo.environment["TEST_RUNNER_DIT_WEIGHTS_PATH"]
+        guard let dir = pathEnv?.trimmingCharacters(in: .whitespaces), !dir.isEmpty else { return }
+        let expanded = (dir as NSString).expandingTildeInPath
+        let silenceURL = URL(fileURLWithPath: expanded).appendingPathComponent("silence_latent.safetensors")
+        if let loaded = try? loadSilenceLatent(from: silenceURL) {
+            loadedSilenceLatent = loaded
+            print("[SmokeTest] Loaded silence_latent.safetensors: shape=\(loaded.shape)")
+            return
+        }
+        // Also check for .pt file
+        let ptURL = URL(fileURLWithPath: expanded).appendingPathComponent("silence_latent.pt")
+        if FileManager.default.fileExists(atPath: ptURL.path) {
+            print("[SmokeTest] WARNING: silence_latent.pt exists but silence_latent.safetensors not found - export it with: python -c \"import torch; from safetensors.torch import save_file; save_file({'latent': torch.load('$ptURL', weights_only=True)}, '$silenceURL')\"")
+        }
+    }
+
+    override class func setUp() {
+        super.setUp()
+        initializeSilenceLatent()
+    }
 
     /// Returns DiTDecoder with weights loaded from DIT_WEIGHTS_PATH when set and model.safetensors exists; otherwise unloaded decoder.
     private static func makeDiTDecoderForSmokeTest() throws -> DiTDecoder {
@@ -60,16 +87,37 @@ final class GenerationSmokeTests: XCTestCase {
         return decoder
     }
 
-    /// Returns a ConditioningProvider: loads precomputed encoder/context from CONDITIONING_DIR when set and shapes match; otherwise zeros.
+    /// Returns a ConditioningProvider: loads precomputed encoder/context from CONDITIONING_DIR when set,
+    /// uses silence_latent for context latents when available, otherwise zeros.
     private static func makeConditioningProviderForSmokeTest() -> ConditioningProvider {
         { params, latentLength, _ in
-            if let conditions = Self.loadPrecomputedConditioning(latentLength: latentLength) {
-                return conditions
+            // Get silence_latent for source/context latents (critical for meaningful text2music output)
+            var silenceLatent: MLXArray? = nil
+            if let sil = Self.loadedSilenceLatent, sil.dim(1) >= latentLength, sil.dim(2) == 64 {
+                silenceLatent = sil[0..<1, 0..<latentLength, 0..<64]
             }
+            
+            // First check for precomputed conditioning (encoder + context)
+            if let conditions = Self.loadPrecomputedConditioning(latentLength: latentLength) {
+                // Use silence_latent for context latents (source latents) if available
+                let ctxLatents = silenceLatent ?? conditions.contextLatents
+                return DiTConditions(
+                    encoderHiddenStates: conditions.encoderHiddenStates,
+                    contextLatents: ctxLatents,
+                    encoderAttentionMask: conditions.encoderAttentionMask,
+                    nullConditionEmbedding: conditions.nullConditionEmbedding
+                )
+            }
+            
+            // No precomputed conditioning - build from silence_latent or zeros
             let encL = 8
+            let ctxLatents = silenceLatent ?? MLXArray.zeros([1, latentLength, 128])
+            if silenceLatent != nil {
+                print("[SmokeTest] Using silence_latent for context latents, shape=\(ctxLatents.shape)")
+            }
             return DiTConditions(
                 encoderHiddenStates: MLXArray.zeros([1, encL, 2048]),
-                contextLatents: MLXArray.zeros([1, latentLength, 128])
+                contextLatents: ctxLatents
             )
         }
     }
