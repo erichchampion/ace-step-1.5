@@ -98,8 +98,15 @@ public class DiTAttention: Module {
         k = repeatKv(k, nRep: nRep)
         v = repeatKv(v, nRep: nRep)
 
+        // Cross-attn encoder mask is [B, encL]; MLX expects mask to broadcast with scores [B, numHeads, L, encL].
+        // Expand to [B, 1, 1, encL] (Python: attention_mask.view(B, 1, 1, seq_len)).
+        var maskForAttn = attentionMask
+        if let m = maskForAttn, m.ndim == 2 {
+            maskForAttn = m.expandedDimensions(axis: 1).expandedDimensions(axis: 2)
+        }
+
         let attnOut = MLXFast.scaledDotProductAttention(
-            queries: q, keys: k, values: v, scale: scale, mask: attentionMask
+            queries: q, keys: k, values: v, scale: scale, mask: maskForAttn
         )
         let out = attnOut.transposed(axes: [0, 2, 1, 3]).reshaped([b, l, numHeads * headDim])
         return oProj(out)
