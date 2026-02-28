@@ -167,6 +167,15 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         guard audio.ndim == 2 || audio.ndim == 3 else {
             throw ContractGenerationPipelineError.invalidDecodedAudioShape(audio.shape)
         }
+        // Enforce contract length T*2048: some VAE implementations (e.g. MLX ConvTranspose1d) can
+        // produce slightly longer output; trimming avoids extra samples that can sound like repetition.
+        let tLatent = decodeLatent.dim(1)
+        let expectedSamples = tLatent * vaeLatentToSamplesFactor
+        if audio.ndim == 3, audio.dim(1) > expectedSamples {
+            audio = audio[0..<audio.dim(0), 0..<expectedSamples, 0..<audio.dim(2)]
+        } else if audio.ndim == 2, audio.dim(1) > expectedSamples {
+            audio = audio[0..<audio.dim(0), 0..<expectedSamples]
+        }
         #if DEBUG
         if audio.ndim == 3, audio.dim(2) == 2 {
             let b0 = 0..<1
