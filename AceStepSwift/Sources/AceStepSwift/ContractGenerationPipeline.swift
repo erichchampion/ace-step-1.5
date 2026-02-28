@@ -34,13 +34,17 @@ private let defaultLatentLength = 100
 /// Latent channel dimension (DiT/VAE).
 private let latentChannels = 64
 
+/// Minimum latent length (matches Python conditioning_target max(128, ...) padding for short clips).
+private let minLatentLength = 128
+
 /// Returns latent time steps T from duration (seconds) and sample rate.
-/// If duration <= 0, returns defaultLatentLength. Exposed for testing.
+/// If duration <= 0, returns defaultLatentLength. Uses at least minLatentLength so short clips
+/// match Python's padded length and precomputed conditioning (e.g. 128 frames) fits. Exposed for testing.
 public func latentLengthFromDuration(durationSeconds: Double, sampleRate: Int) -> Int {
     guard durationSeconds > 0 else { return defaultLatentLength }
     let samples = durationSeconds * Double(sampleRate)
     let t = Int(ceil(samples / Double(vaeLatentToSamplesFactor)))
-    return max(1, t)
+    return max(minLatentLength, max(1, t))
 }
 
 /// Optional provider of DiT conditions. Receives params, latent length T (from duration/sample rate), and sample rate

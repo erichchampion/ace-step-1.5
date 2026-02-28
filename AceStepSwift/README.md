@@ -82,6 +82,20 @@ swift test
 
 Some tests (APG, diffusion contract, VAE decode contract) use MLX arrays and require Metal; they may be skipped or fail in environments where the default Metal library is not available (e.g. some CI). Pure-logic tests (constants, params, timestep schedule, parser, format/generate API with mocks) do not require Metal.
 
+## Smoke test (Python + Swift)
+
+From the **repository root** (parent of `AceStepSwift`), a script runs both the original Python pipeline and the Swift package to generate short clips, then validates that each output file contains a non-silent, variable waveform:
+
+```bash
+./scripts/run_generation_smoke_test.sh
+```
+
+- **Output directory:** `OUTPUT_DIR` (default: `./generation_smoke_output`). Python writes `python_out.wav`, Swift writes `swift_out.wav`.
+- **Python:** Defaults to `acestep-v15-turbo`; looks for a valid checkpoint under `checkpoints/` (tries `acestep-v15-turbo` then `acestep-v15-base`). Set `ACESTEP_CONFIG_PATH` to override. If no checkpoint dir exists, the Python step is skipped.
+- **Swift:** Uses the existing pipeline with minimal conditioning and a fake VAE so it runs without DiT/VAE weights; it still produces a synthetic waveform for validation. For real decoded audio, you would set `DIT_WEIGHTS_PATH` (and VAE weights) and use `MLXVAEDecoder` in the test (not implemented in the script by default).
+
+Validation (variable waveform, no silence/NaN) is done by `scripts/validate_audio.py` (uses `soundfile` or `scipy.io.wavfile` if available).
+
 ## Status
 
 - **Done:** Types, constants, timestep schedule, format-sample parser and API, generate-music API, stubs and mocks, **MLXLLMFormatProvider** (load from directory or Hugging Face id, ChatSession-based generation). FSM states and transition logic (`FSMTransitions`, `nextState(after:options:)`) with tests. Invalid-params test for `generateMusic`.
