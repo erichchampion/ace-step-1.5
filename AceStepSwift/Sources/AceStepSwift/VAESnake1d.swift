@@ -20,17 +20,17 @@ public class VAESnake1d: Module, UnaryLayer {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        // Upcast to float32 for exp/sin/power to prevent overflow with float16
-        // weights (exp overflows float16 at alpha > ~11). This matches Python
-        // vae_model.py MLXSnake1d implementation.
+        // Match Python vae_model.py MLXSnake1d: only upcast to float32 when weights are float16
+        // to prevent exp overflow. For float32 weights, skip the upcast for performance.
         let aBase: MLXArray
         let bBase: MLXArray
+        let inputIsFloat16 = x.dtype == .float16
         if logscale {
-            aBase = exp(alpha.asType(.float32))
-            bBase = exp(beta.asType(.float32))
+            aBase = inputIsFloat16 ? exp(alpha.asType(.float32)) : exp(alpha)
+            bBase = inputIsFloat16 ? exp(beta.asType(.float32)) : exp(beta)
         } else {
-            aBase = alpha.asType(.float32)
-            bBase = beta.asType(.float32)
+            aBase = inputIsFloat16 ? alpha.asType(.float32) : alpha
+            bBase = inputIsFloat16 ? beta.asType(.float32) : beta
         }
         let aCount = (0..<aBase.ndim).reduce(1) { $0 * aBase.dim($1) }
         let bCount = (0..<bBase.ndim).reduce(1) { $0 * bBase.dim($1) }
@@ -52,9 +52,16 @@ public class VAESnake1d: Module, UnaryLayer {
             b = bFlat
         }
 
-        // Compute in float32 for numerical stability, then cast back
-        let xF32 = x.asType(.float32)
-        let resultF32 = xF32 + (1 / (b + 1e-9)) * pow(sin(a * xF32), 2)
-        return resultF32.asType(x.dtype)
+        // Compute result - only upcast x to float32 for numerical stability when input is float16
+        // to match Python vae_model.py MLXSnake1d main path
+        let result: MLXArray
+        if inputIsFloat16 {
+            let xF32 = x.asType(.float32)
+            result = xF32 + (1 / (b + 1e-9)) * pow(sin(a * xF32), 2)
+            return result.asType(x.dtype)
+        } else {
+            result = x + (1 / (b + 1e-9)) * pow(sin(a * x), 2)
+            return result
+        }
     }
 }
