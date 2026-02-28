@@ -48,6 +48,7 @@ public final class MLXDiTStepper: DiffusionStepper {
             timestepR: timestepRArr,
             encoderHiddenStates: enc,
             contextLatents: ctx,
+            encoderAttentionMask: conditions.encoderAttentionMask,
             cache: cache,
             useCache: useCache
         )

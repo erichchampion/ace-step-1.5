@@ -89,13 +89,14 @@ public class DiTDecoder: Module {
         return m
     }
 
-    /// hiddenStates [B, T, 64], timestep [B], timestepR [B], encoderHiddenStates [B, encL, D], contextLatents [B, T, C_ctx]. Returns [B, T, 64], cache.
+    /// hiddenStates [B, T, 64], timestep [B], timestepR [B], encoderHiddenStates [B, encL, D], contextLatents [B, T, C_ctx], optional encoderAttentionMask [B, encL]. Returns [B, T, 64], cache.
     public func call(
         hiddenStates: MLXArray,
         timestep: MLXArray,
         timestepR: MLXArray,
         encoderHiddenStates: MLXArray,
         contextLatents: MLXArray,
+        encoderAttentionMask: MLXArray? = nil,
         cache: DiTCrossAttentionCache? = nil,
         useCache: Bool = true
     ) -> (MLXArray, DiTCrossAttentionCache?) {
@@ -127,7 +128,7 @@ public class DiTDecoder: Module {
                 temb: timestepProj,
                 selfAttnMask: selfMask,
                 encoderHiddenStates: encProj,
-                encoderAttentionMask: nil,
+                encoderAttentionMask: encoderAttentionMask,
                 cache: cache,
                 useCache: useCache
             )
