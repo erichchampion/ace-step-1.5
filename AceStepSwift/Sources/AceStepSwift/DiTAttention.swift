@@ -98,11 +98,12 @@ public class DiTAttention: Module {
         k = repeatKv(k, nRep: nRep)
         v = repeatKv(v, nRep: nRep)
 
-        // Cross-attn encoder mask is [B, encL]; MLX expects mask to broadcast with scores [B, numHeads, L, encL].
-        // Expand to [B, 1, 1, encL] (Python: attention_mask.view(B, 1, 1, seq_len)).
+        // Cross-attn encoder mask: [B, encL]. MLX expects additive mask (0=attend, -inf=mask) broadcasting to [B, numHeads, L, encL].
+        // Python: 1=valid 0=pad -> convert to additive then view(B, 1, 1, encL). If already additive (e.g. 0/-1e9), same threshold works.
         var maskForAttn = attentionMask
         if let m = maskForAttn, m.ndim == 2 {
-            maskForAttn = m.expandedDimensions(axis: 1).expandedDimensions(axis: 2)
+            let additive = MLX.where(m .> 0.5, MLXArray(0 as Float), MLXArray(-1e9 as Float))
+            maskForAttn = additive.expandedDimensions(axis: 1).expandedDimensions(axis: 2)
         }
 
         let attnOut = MLXFast.scaledDotProductAttention(

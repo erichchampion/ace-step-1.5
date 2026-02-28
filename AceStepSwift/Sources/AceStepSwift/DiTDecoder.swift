@@ -89,7 +89,7 @@ public class DiTDecoder: Module {
         return m
     }
 
-    /// hiddenStates [B, T, 64], timestep [B], timestepR [B], encoderHiddenStates [B, encL, D], contextLatents [B, T, C_ctx], optional encoderAttentionMask [B, encL]. Returns [B, T, 64], cache.
+    /// hiddenStates [B, T, 64], timestep [B], timestepR [B], encoderHiddenStates [B, encL, D], contextLatents [B, T, C_ctx], optional encoderAttentionMask [B, encL] (1=valid, 0=pad). Returns [B, T, 64], cache.
     public func call(
         hiddenStates: MLXArray,
         timestep: MLXArray,
