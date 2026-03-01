@@ -105,9 +105,25 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
             return (embeddings, mask)
         }
         
-        print("[QwenTextHiddenStateProvider] WARNING: Using full model forward for lyrics (no embed_tokens)")
-        let lyric = try encodeLyricHiddenStates(text: text, maxLength: maxLength)
-        return (lyric.hiddenStates, lyric.attentionMask)
+        print("[QwenTextHiddenStateProvider] Using model.flattenedParameters() for lyrics")
+        let inputIDs = MLXArray(tokenIDs, [1, tokenIDs.count])
+        let embeddings: MLXArray
+        lock.lock()
+        defer { lock.unlock() }
+        let flat = model.parameters().flattened()
+        if let match = flat.first(where: { $0.0 == "model.embed_tokens.weight" || $0.0 == "embed_tokens.weight" }) {
+            // Manual embedding lookup: shape [vocab_size, hidden_dim]
+            let weight = match.1
+            embeddings = weight[inputIDs]
+        } else {
+            print("[QwenTextHiddenStateProvider] FAIL: Could not find embed_tokens.weight, falling back to full forward")
+            lock.unlock()
+            let lyric = try encodeLyricHiddenStates(text: text, maxLength: maxLength)
+            return (lyric.hiddenStates, lyric.attentionMask)
+        }
+        embeddings.eval()
+        let mask = MLXArray.ones([1, tokenIDs.count])
+        return (embeddings, mask)
     }
 }
 
