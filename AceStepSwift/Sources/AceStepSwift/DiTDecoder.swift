@@ -140,16 +140,9 @@ public class DiTDecoder: Module {
             : scaleShiftTable
         let tembExp = temb.expandedDimensions(axis: 1)
         let combined = table + tembExp
-        let b = h.dim(0)
-        let d = h.dim(2)
-        let flatLen = combined.dim(0) * combined.dim(1) * combined.dim(2)
-        let flat = combined.reshaped([flatLen])
-        var shift = flat[0..<(b * d)].reshaped([b, 1, d])
-        var scale = flat[(b * d)..<(2 * b * d)].reshaped([b, 1, d])
-        if shift.dim(1) != 1 { shift = shift.transposed(axes: [0, 2, 1]) }
-        if scale.dim(1) != 1 { scale = scale.transposed(axes: [0, 2, 1]) }
-        shift.eval()
-        scale.eval()
+        let parts = split(combined, parts: 2, axis: 1)
+        let shift = parts[0]
+        let scale = parts[1]
         h = normOut(h) * (1.0 + scale) + shift
         h = projOut(h)
         // Trim padding from axis 1. Only use 3D subscript when ndim == 3 to avoid MLX getItemND

@@ -70,21 +70,14 @@ public class DiTLayer: Module {
         // Ensure [1, 6, D]; checkpoint may have [1, D, 6]. temb is timestep_proj [B, 6, D]. Flatten + 1D slice so layout is guaranteed.
         let table = scaleShiftTable.dim(1) == 6 ? scaleShiftTable : scaleShiftTable.transposed(axes: [0, 2, 1])
         let modulation = table + temb
-        let b = modulation.dim(0)
-        let d = modulation.dim(2)
-        let flatLen = modulation.dim(0) * modulation.dim(1) * modulation.dim(2)
-        let flat = modulation.reshaped([flatLen])
-        let step = b * d
-        func part(_ i: Int) -> MLXArray {
-            let p = flat[(i * step)..<((i + 1) * step)].reshaped([b, 1, d])
-            return p.dim(1) != 1 ? p.transposed(axes: [0, 2, 1]) : p
-        }
-        let shiftMsa = part(0)
-        let scaleMsa = part(1)
-        let gateMsa = part(2)
-        let cShiftMsa = part(3)
-        let cScaleMsa = part(4)
-        let cGateMsa = part(5)
+        let parts = split(modulation, parts: 6, axis: 1)
+        
+        let shiftMsa = parts[0]
+        let scaleMsa = parts[1]
+        let gateMsa = parts[2]
+        let cShiftMsa = parts[3]
+        let cScaleMsa = parts[4]
+        let cGateMsa = parts[5]
 
         var h = hiddenStates
         var normed = selfAttnNorm(h)

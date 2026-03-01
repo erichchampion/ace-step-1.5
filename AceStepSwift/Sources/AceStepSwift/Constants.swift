@@ -9,7 +9,7 @@ public enum AceStepConstants {
     public static let durationMin = 10
     public static let durationMax = 600
     /// Default audio sample rate (Hz). Matches Python handler.
-    public static let defaultSampleRate = 48000
+    public static let defaultSampleRate = 51200
 
     public static let validTimeSignatures: [Int] = [2, 3, 4, 6]
 
