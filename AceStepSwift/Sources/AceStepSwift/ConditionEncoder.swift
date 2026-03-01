@@ -1,6 +1,7 @@
 /**
  Swift condition encoder: text projector + lyric encoder + timbre encoder + pack_sequences.
  Load encoder.text_projector.*, encoder.lyric_encoder.*, encoder.timbre_encoder.* from checkpoint.
+ (Python reference: acestep/models/base/modeling_acestep_v15_base.py and conditioning handlers)
  */
 
 import Foundation

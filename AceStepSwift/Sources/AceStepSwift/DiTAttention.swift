@@ -1,5 +1,7 @@
 /**
- Multi-head attention with QK-RMSNorm, RoPE (self), optional KV cache (cross), sliding-window mask. Mirrors dit_model.MLXAttention.
+ Multi-head attention with QK-RMSNorm, RoPE (self), optional KV cache (cross), sliding-window mask. 
+ Mirrors dit_model.MLXAttention and Python AceStepAttention 
+ (Python reference: acestep/models/base/modeling_acestep_v15_base.py).
  */
 
 import Foundation

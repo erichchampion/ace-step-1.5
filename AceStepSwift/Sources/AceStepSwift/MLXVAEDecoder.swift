@@ -1,5 +1,6 @@
 /**
  Real VAE decoder conforming to VAEDecoder. Load weights from safetensors (Python vae_convert output).
+ (Python reference: AutoencoderOobleck and acestep/core/generation/handler/generate_music_decode.py)
  */
 
 import Foundation

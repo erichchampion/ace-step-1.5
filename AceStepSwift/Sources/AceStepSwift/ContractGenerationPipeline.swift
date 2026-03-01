@@ -2,6 +2,7 @@
  Pipeline that runs diffusion (via DiffusionStepper) then VAE decode (via VAEDecoder).
  Uses timestep schedule and optional seed; returns GenerationResult with audios.
  Enables end-to-end path with fake or real DiT/VAE.
+ (Python reference: acestep/core/generation/handler/generate_music_execute.py and acestep_v15_pipeline.py)
  */
 
 import Foundation

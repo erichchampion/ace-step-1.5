@@ -1,5 +1,6 @@
 /**
  Single DiT transformer layer: AdaLN, self-attn, cross-attn, MLP. Mirrors dit_model.MLXDiTLayer.
+ (Python reference: acestep/models/base/modeling_acestep_v15_base.py - AceStepDiTLayer)
  */
 
 import Foundation
@@ -68,6 +69,7 @@ public class DiTLayer: Module {
         useCache: Bool = false
     ) -> MLXArray {
         // Ensure [1, 6, D]; checkpoint may have [1, D, 6]. temb is timestep_proj [B, 6, D]. Flatten + 1D slice so layout is guaranteed.
+        // Python equivalent splits into 6 chunks for shift/scale/gate of self-attn/cross-attn/mlp
         let table = scaleShiftTable.dim(1) == 6 ? scaleShiftTable : scaleShiftTable.transposed(axes: [0, 2, 1])
         let modulation = table + temb
         let parts = split(modulation, parts: 6, axis: 1)
@@ -80,13 +82,17 @@ public class DiTLayer: Module {
         let cGateMsa = parts[5]
 
         var h = hiddenStates
+        
+        // Self Attention with AdaLN
         var normed = selfAttnNorm(h)
         normed = normed * (1.0 + scaleMsa) + shiftMsa
         h = h + selfAttn.call(hiddenStates: normed, positionCosSin: positionCosSin, attentionMask: selfAttnMask) * gateMsa
 
+        // Cross Attention (no AdaLN scale/shift, uses encoder parameters)
         normed = crossAttnNorm(h)
         h = h + crossAttn.call(hiddenStates: normed, attentionMask: encoderAttentionMask, encoderHiddenStates: encoderHiddenStates, cache: cache, useCache: useCache)
 
+        // MLP with AdaLN
         normed = mlpNorm(h)
         normed = normed * (1.0 + cScaleMsa) + cShiftMsa
         h = h + mlp(normed) * cGateMsa

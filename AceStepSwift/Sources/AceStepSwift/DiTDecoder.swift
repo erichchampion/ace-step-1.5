@@ -1,5 +1,7 @@
 /**
- DiT diffusion decoder: patch in, timestep + encoder conditioning, N layers, patch out. Mirrors dit_model.MLXDiTDecoder.
+ DiT diffusion decoder: patch in, timestep + encoder conditioning, N layers, patch out. 
+ Mirrors dit_model.MLXDiTDecoder and Python AceStepDiTModel 
+ (Python reference: acestep/models/base/modeling_acestep_v15_base.py).
  */
 
 import Foundation
@@ -90,6 +92,7 @@ public class DiTDecoder: Module {
     }
 
     /// hiddenStates [B, T, 64], timestep [B], timestepR [B], encoderHiddenStates [B, encL, D], contextLatents [B, T, C_ctx], optional encoderAttentionMask [B, encL] (1=valid, 0=pad). Returns [B, T, 64], cache.
+    // Python reference: AceStepDiTModel.forward
     public func call(
         hiddenStates: MLXArray,
         timestep: MLXArray,
@@ -100,11 +103,15 @@ public class DiTDecoder: Module {
         cache: DiTCrossAttentionCache? = nil,
         useCache: Bool = true
     ) -> (MLXArray, DiTCrossAttentionCache?) {
+        // Compute timestep embeddings for diffusion conditioning
+        // Python equivalent: temb_t, timestep_proj_t = self.time_embed(timestep)
         let (tembT, projT) = timeEmbed.call(timestep)
         let (tembR, projR) = timeEmbedR.call(timestep - timestepR)
         let temb = tembT + tembR
         let timestepProj = projT + projR
 
+        // Concatenate context latents (source latents + chunk masks) with hidden states
+        // Python equivalent: torch.cat([context_latents, hidden_states], dim=-1)
         var h = concatenated([contextLatents, hiddenStates], axis: 2)
         let originalSeqLen = h.dim(1)
         let padLength = (patchSize - (h.dim(1) % patchSize)) % patchSize
@@ -114,6 +121,8 @@ public class DiTDecoder: Module {
         }
 
         h = projIn(h)
+        // Project encoder hidden states to model dimension
+        // Python equivalent: condition_embedder(encoder_hidden_states)
         let encProj = conditionEmbedder(encoderHiddenStates)
         let seqLen = h.dim(1)
         let (cos, sin) = rotaryEmb.call(seqLen: seqLen)
@@ -135,6 +144,7 @@ public class DiTDecoder: Module {
         }
 
         // Output norm: need shift/scale as [B, 1, D] to broadcast with h [B, L, D].
+        // Python equivalent: scale_shift_table split + Adaptive RMSNorm
         let table: MLXArray = scaleShiftTable.dim(2) == 2
             ? scaleShiftTable.transposed(axes: [0, 2, 1])
             : scaleShiftTable
@@ -144,6 +154,8 @@ public class DiTDecoder: Module {
         let shift = parts[0]
         let scale = parts[1]
         h = normOut(h) * (1.0 + scale) + shift
+        
+        // Final projection back to audio acoustic hidden dim
         h = projOut(h)
         // Trim padding from axis 1. Only use 3D subscript when ndim == 3 to avoid MLX getItemND
         // out-of-bounds (starts[axis]) when run on concurrent queues with unexpected shapes.

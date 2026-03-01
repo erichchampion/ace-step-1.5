@@ -241,6 +241,7 @@ Findings from reviewing the Swift code for parity with Python and for library ro
 
 | Finding | Location | Severity | Notes |
 |--------|----------|----------|--------|
+| **Architectural Parity** | `DiTDecoder`, `DiTLayer`, `ContractGenerationPipeline`, etc. | Verified | Swift DiT components, conditioning pipelines, and attention modules closely mirror Python's `AceStepDiTModel`, `AceStepDiTLayer` and `_mlx_run_diffusion(...)` logic. Python references were directly annotated into Swift source code to help with traceability and parity maintenance. |
 | **Hardcoded debug log path** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Resolved | File logging to a fixed path was removed; the library no longer writes debug logs to disk. Use `debugPrint` in DEBUG builds only. |
 | **`loadArrays` dependency** | [WeightLoading.swift](../Sources/AceStepSwift/WeightLoading.swift) (lines 53, 84) | Resolved | `loadDiTParameters` and `loadParameters` use **MLX**'s `loadArrays(url:stream:)` (mlx-swift package) to read safetensors. The AceStepSwift target already depends on MLX; no in-repo implementation is required. |
 | **timestep_r semantics** | [SWIFT_VS_PYTHON_LOGIC.md](SWIFT_VS_PYTHON_LOGIC.md) §8 | Resolved | Previously `MLXDiTStepper` passed 0 for `timestep_r`, so the second time embedding saw the full timestep instead of 0. This is fixed: the stepper now passes the current timestep for both `timestep` and `timestep_r`, so the decoder sees `timestep - timestep_r = 0` for the second embedding, matching Python. |
