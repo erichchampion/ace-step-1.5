@@ -32,7 +32,7 @@ public func apgForward(
     }
     if normThreshold > 0 {
         let diffSq = (diff * diff).sum(axis: projAxis, keepDims: true)
-        let diffNorm = sqrt(diffSq + 1e-8)
+        let diffNorm = sqrt(diffSq)
         let scaleFactor = minimum(MLXArray(1.0 as Float), normThreshold / (diffNorm + 1e-8))
         diff = diff * scaleFactor
     }

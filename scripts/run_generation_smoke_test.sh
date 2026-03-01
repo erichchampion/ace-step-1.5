@@ -5,6 +5,9 @@
 #
 # Usage:
 #   ./scripts/run_generation_smoke_test.sh
+#   SMOKE_DURATION=5.0 ./scripts/run_generation_smoke_test.sh      # longer clip
+#   SMOKE_STEPS=8 ./scripts/run_generation_smoke_test.sh            # more diffusion steps
+#   SMOKE_EXTRA_TESTS=1 ./scripts/run_generation_smoke_test.sh      # run parameter variation tests
 #
 # Environment:
 #   OUTPUT_DIR          Where to write outputs (default: ./generation_smoke_output).
@@ -13,6 +16,10 @@
 #   DIT_WEIGHTS_PATH    DiT checkpoint dir (model.safetensors). Set automatically when checkpoints/$ACESTEP_CONFIG_PATH exists.
 #   VAE_WEIGHTS_PATH    VAE decoder safetensors path. Set automatically when checkpoints/vae/decoder.safetensors exists.
 #   CONDITIONING_DIR    Dir with encoder_hidden_states.bin and context_latents.bin for Swift. Set by export_conditioning_for_swift.py.
+#   SMOKE_DURATION      Duration in seconds for generated audio (default: 5.0).
+#   SMOKE_STEPS         Number of diffusion steps (default: 8).
+#   SMOKE_SEED          Random seed (default: 42).
+#   SMOKE_EXTRA_TESTS   When set to 1, run additional parameter variation tests.
 #
 # Exit: 0 if every existing output file passes validation; non-zero otherwise.
 set -e
@@ -21,6 +28,14 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/generation_smoke_output}"
 mkdir -p "$OUTPUT_DIR"
 echo "Output directory: $OUTPUT_DIR"
+
+# Configurable generation parameters
+SMOKE_DURATION="${SMOKE_DURATION:-5.0}"
+SMOKE_STEPS="${SMOKE_STEPS:-8}"
+SMOKE_SEED="${SMOKE_SEED:-42}"
+SMOKE_EXTRA_TESTS="${SMOKE_EXTRA_TESTS:-0}"
+
+echo "Generation params: duration=${SMOKE_DURATION}s, steps=${SMOKE_STEPS}, seed=${SMOKE_SEED}"
 
 # Default config to acestep-v15-turbo; if no checkpoint found for it, try first available known config
 ACESTEP_CONFIG_PATH="${ACESTEP_CONFIG_PATH:-acestep-v15-turbo}"
@@ -37,9 +52,10 @@ fi
 
 # Python: generate python_out.wav when a valid checkpoint dir exists
 if [ -d "$CHECKPOINTS_DIR/$ACESTEP_CONFIG_PATH" ]; then
-  echo "Running Python generator (config: $ACESTEP_CONFIG_PATH)..."
+  echo ""
+  echo "=== Python Generation (config: $ACESTEP_CONFIG_PATH) ==="
   export ACESTEP_CONFIG_PATH
-  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$OUTPUT_DIR"); then
+  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$OUTPUT_DIR" --duration "$SMOKE_DURATION" --seed "$SMOKE_SEED"); then
     echo "Python generator: ok"
   else
     echo "Python generator: failed (continuing)"
@@ -93,11 +109,22 @@ else
     echo "Tip: run 'python scripts/export_vae_decoder_mlx.py' to create $VAE_WEIGHTS for real decoded audio"
   fi
 fi
+
+# Export generation params so Swift tests can use the same values
+export SMOKE_DURATION
+export SMOKE_STEPS
+export SMOKE_SEED
+export TEST_RUNNER_SMOKE_DURATION="$SMOKE_DURATION"
+export TEST_RUNNER_SMOKE_STEPS="$SMOKE_STEPS"
+export TEST_RUNNER_SMOKE_SEED="$SMOKE_SEED"
+
 # Use xcodebuild test so Metal shaders (default.metallib) are built; "swift test" does not build them and triggers "Failed to load the default metallib".
 # Xcode 15+ passes env vars to tests when prefixed with TEST_RUNNER_ (prefix stripped in the test process).
 export OUTPUT_DIR
 export TEST_RUNNER_OUTPUT_DIR="$OUTPUT_DIR"
 SWIFT_OK=0
+echo ""
+echo "=== Swift Generation ==="
 if command -v xcodebuild >/dev/null 2>&1; then
   echo "Running Swift generator (xcodebuild test for Metal)..."
   if (cd "$REPO_ROOT/AceStepSwift" && xcodebuild test -scheme AceStepSwift -destination 'platform=macOS' -only-testing:AceStepSwiftTests/GenerationSmokeTests/testGenerationWritesWaveformToOutputDir 2>&1); then
@@ -116,7 +143,10 @@ else
   echo "Swift generator: failed (continuing)"
 fi
 
-# Validate every existing output
+# ---- Validation ----
+echo ""
+echo "=== Validation ==="
+
 TO_VALIDATE=()
 [ -f "$OUTPUT_DIR/python_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/python_out.wav")
 [ -f "$OUTPUT_DIR/swift_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_out.wav")
@@ -126,6 +156,64 @@ if [ ${#TO_VALIDATE[@]} -eq 0 ]; then
   exit 1
 fi
 
-echo "Validating waveform(s)..."
-python "$REPO_ROOT/scripts/validate_audio.py" "${TO_VALIDATE[@]}"
-exit $?
+echo "Validating waveform(s) with expected duration ~${SMOKE_DURATION}s..."
+python "$REPO_ROOT/scripts/validate_audio.py" \
+  --expected-duration "$SMOKE_DURATION" \
+  --duration-tolerance 1.0 \
+  --compare \
+  "${TO_VALIDATE[@]}"
+VALIDATION_RESULT=$?
+
+# ---- Extra parameter variation tests (when enabled) ----
+if [ "$SMOKE_EXTRA_TESTS" -eq 1 ] && [ -d "$CHECKPOINTS_DIR/$ACESTEP_CONFIG_PATH" ]; then
+  echo ""
+  echo "=== Extra Tests: Parameter Variations ==="
+  
+  # Test seed reproducibility (run same seed twice, compare)
+  EXTRA_OUTPUT="$OUTPUT_DIR/extra_tests"
+  mkdir -p "$EXTRA_OUTPUT"
+  
+  echo "Testing seed reproducibility (seed=$SMOKE_SEED)..."
+  SEED_OK=true
+  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "seed test run 1" 2>&1); then
+    mv "$EXTRA_OUTPUT/python_out.wav" "$EXTRA_OUTPUT/seed_run1.wav" 2>/dev/null || true
+    if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "seed test run 1" 2>&1); then
+      mv "$EXTRA_OUTPUT/python_out.wav" "$EXTRA_OUTPUT/seed_run2.wav" 2>/dev/null || true
+      if [ -f "$EXTRA_OUTPUT/seed_run1.wav" ] && [ -f "$EXTRA_OUTPUT/seed_run2.wav" ]; then
+        echo "Comparing seed reproducibility:"
+        python "$REPO_ROOT/scripts/validate_audio.py" --compare "$EXTRA_OUTPUT/seed_run1.wav" "$EXTRA_OUTPUT/seed_run2.wav"
+      fi
+    fi
+  fi
+  
+  # Test short duration (1s)
+  echo ""
+  echo "Testing short duration (1s)..."
+  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "short clip" 2>&1); then
+    mv "$EXTRA_OUTPUT/python_out.wav" "$EXTRA_OUTPUT/short_1s.wav" 2>/dev/null || true
+    if [ -f "$EXTRA_OUTPUT/short_1s.wav" ]; then
+      python "$REPO_ROOT/scripts/validate_audio.py" --expected-duration 1.0 --duration-tolerance 0.5 "$EXTRA_OUTPUT/short_1s.wav"
+    fi
+  fi
+  
+  # Test longer duration (10s)
+  echo ""
+  echo "Testing longer duration (10s)..."
+  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 10.0 --seed "$SMOKE_SEED" --caption "long clip" 2>&1); then
+    mv "$EXTRA_OUTPUT/python_out.wav" "$EXTRA_OUTPUT/long_10s.wav" 2>/dev/null || true
+    if [ -f "$EXTRA_OUTPUT/long_10s.wav" ]; then
+      python "$REPO_ROOT/scripts/validate_audio.py" --expected-duration 10.0 --duration-tolerance 1.0 "$EXTRA_OUTPUT/long_10s.wav"
+    fi
+  fi
+  
+  echo ""
+  echo "Extra tests complete."
+fi
+
+echo ""
+if [ "$VALIDATION_RESULT" -eq 0 ]; then
+  echo "=== All validations PASSED ==="
+else
+  echo "=== Some validations FAILED ==="
+fi
+exit $VALIDATION_RESULT

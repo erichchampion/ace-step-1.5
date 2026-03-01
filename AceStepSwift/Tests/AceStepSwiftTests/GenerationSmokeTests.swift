@@ -22,6 +22,23 @@ final class GenerationSmokeTests: XCTestCase {
     /// Directory containing precomputed conditioning (encoder_hidden_states.bin, context_latents.bin). When set, use instead of zeros.
     private static let conditioningDirEnv = "CONDITIONING_DIR"
 
+    // Configurable generation parameters from environment (set by run_generation_smoke_test.sh)
+    private static var smokeDuration: Double {
+        let env = ProcessInfo.processInfo.environment["SMOKE_DURATION"]
+            ?? ProcessInfo.processInfo.environment["TEST_RUNNER_SMOKE_DURATION"]
+        return Double(env ?? "") ?? 5.0
+    }
+    private static var smokeSteps: Int {
+        let env = ProcessInfo.processInfo.environment["SMOKE_STEPS"]
+            ?? ProcessInfo.processInfo.environment["TEST_RUNNER_SMOKE_STEPS"]
+        return Int(env ?? "") ?? 8
+    }
+    private static var smokeSeed: Int {
+        let env = ProcessInfo.processInfo.environment["SMOKE_SEED"]
+            ?? ProcessInfo.processInfo.environment["TEST_RUNNER_SMOKE_SEED"]
+        return Int(env ?? "") ?? 42
+    }
+
     /// Loaded silence latent from DiT checkpoint for source latents (text2music requires this for meaningful output).
     private static var loadedSilenceLatent: MLXArray?
 
@@ -251,13 +268,17 @@ final class GenerationSmokeTests: XCTestCase {
             sampleRate: AceStepConstants.defaultSampleRate,
             conditioningProvider: conditioningProvider
         )
+        let duration = Self.smokeDuration
+        let steps = Self.smokeSteps
+        let seed = Self.smokeSeed
+        print("[SmokeTest] Generating with duration=\(duration)s, steps=\(steps), seed=\(seed)")
         let result = AceStepEngine.generateMusic(
             params: GenerationParams(
                 caption: "Smoke test",
                 lyrics: "[Instrumental]",
-                duration: 1.0,
-                inferenceSteps: 4,
-                seed: 42,
+                duration: duration,
+                inferenceSteps: steps,
+                seed: seed,
                 shift: 3.0
             ),
             config: GenerationConfig(batchSize: 1),
@@ -416,5 +437,56 @@ final class GenerationSmokeTests: XCTestCase {
             // This test verifies the pipeline runs
             XCTAssertEqual(tensorWith.count, tensorZeros.count)
         }
+    }
+
+    /// Test that running with the same seed produces identical output (deterministic generation).
+    func testSeedReproducibility() throws {
+        guard let outDir = ProcessInfo.processInfo.environment[Self.outputDirEnv]?.trimmingCharacters(in: .whitespaces),
+              !outDir.isEmpty else {
+            try XCTSkipIf(true, "Set \(Self.outputDirEnv) for seed reproducibility test")
+            return
+        }
+        let ditDecoder = try Self.makeDiTDecoderForSmokeTest()
+        let stepper = MLXDiTStepper(decoder: ditDecoder)
+        let vaeDecoder: VAEDecoder = Self.makeVAEDecoderForSmokeTest()
+        let conditioningProvider = Self.makeConditioningProviderForSmokeTest()
+
+        func runOnce() -> [Float]? {
+            let pipeline = ContractGenerationPipeline(
+                stepper: stepper,
+                decoder: vaeDecoder,
+                sampleRate: AceStepConstants.defaultSampleRate,
+                conditioningProvider: conditioningProvider
+            )
+            let result = AceStepEngine.generateMusic(
+                params: GenerationParams(
+                    caption: "Seed reproducibility test",
+                    lyrics: "[Instrumental]",
+                    duration: 1.0,
+                    inferenceSteps: 4,
+                    seed: 42,
+                    shift: 3.0
+                ),
+                config: GenerationConfig(batchSize: 1),
+                progress: nil,
+                pipeline: pipeline
+            )
+            guard result.success, let first = result.audios.first,
+                  let tensor = first["tensor"] as? [Float] else { return nil }
+            return tensor
+        }
+
+        guard let run1 = runOnce(), let run2 = runOnce() else {
+            XCTFail("Generation failed")
+            return
+        }
+        XCTAssertEqual(run1.count, run2.count, "Sample counts differ between runs")
+        let minCount = min(run1.count, run2.count)
+        var maxDiff: Float = 0
+        for i in 0..<minCount {
+            maxDiff = max(maxDiff, abs(run1[i] - run2[i]))
+        }
+        print("[SeedReproducibility] maxDiff=\(maxDiff) over \(minCount) samples")
+        XCTAssertEqual(maxDiff, 0.0, accuracy: 1e-5, "Same seed should produce identical output")
     }
 }

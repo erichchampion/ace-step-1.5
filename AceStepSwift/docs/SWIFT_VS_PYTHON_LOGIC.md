@@ -143,9 +143,14 @@ Detailed comparison of the AceStepSwift package against the original Python scri
 |------|----------|-------------|
 | **MLXDiTStepper `timestep_r`** | **Fixed** | Was 0; now current timestep so decoder sees 0 for second time embedding (matches Python). |
 | **Encoder attention mask** | **Fixed** | `DiTConditions` now has optional `encoderAttentionMask`; it is passed through the pipeline and into DiT cross-attention (matches Python when encoder sequences are padded). |
+| **APG double-epsilon** | **Fixed** | `APG.swift` had epsilon inside `sqrt(diffSq + 1e-8)` AND in `normThreshold / (diffNorm + 1e-8)`. Python only adds epsilon in the denominator. Fixed: removed epsilon from inside `sqrt()`. |
 | **Conditioning = zeros** | **Critical** | When no `ConditioningProvider` or empty conditions, Swift uses zeros → useless output. Python always passes real conditioning. Provider must return encoder + context; API now passes latentLength and sampleRate. |
 | **Lyric = embed_tokens** | **Addressed** | Python uses embed_tokens for lyrics; Swift uses `LyricTokenEmbeddingLoader` when the Qwen checkpoint is loaded from a directory (same weights). Fallback: last_hidden_state when loader unavailable. |
 | DiTDecoder/DiTLayer scale_shift transpose | OK | Handles both `[1,2,D]` and `[1,D,2]` (and 6-dim) for checkpoints; logic matches Python. |
 | Snake1d dtype | Minor | Python can upcast to float32 for exp/sin with float16 weights; Swift does not. May matter only for float16. |
+| **SDE inference method** | **Not implemented** | Python `dit_generate.py` supports `infer_method="sde"` (pred_clean → noise blend); Swift only implements ODE stepping. `GenerationParams.inferMethod` field exists but is ignored. |
+| **Cover condition switching** | **Not implemented** | Python switches conditioning mid-diffusion based on `audio_cover_strength`; Swift runs all steps with the same conditions. |
+| **Encoder attention mask (MLX)** | **Noted** | Python MLX `dit_model.py` hardcodes `encoder_attention_mask=None` in the layer loop; Swift passes it through. Swift's behavior is more correct (matches PyTorch base model) but differs from the MLX Python path. |
 
 Recommendation: Ensure the parent app supplies a `ConditioningProvider` that returns real `encoderHiddenStates` [B, encL, 2048] and `contextLatents` [B, latentLength, 128] (using the passed `latentLength` and `sampleRate`) for meaningful generation.
+
