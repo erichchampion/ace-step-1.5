@@ -31,19 +31,13 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
 
     public static func load(directory: URL? = nil) async throws -> QwenTextHiddenStateProvider {
         let context: ModelContext
-        var lyricLoader: LyricTokenEmbeddingLoader? = nil
         
+        // Load the model (either local or remote)
         if let directory {
             do {
                 print("[QwenTextHiddenStateProvider] Attempting to load model from: \(directory.path)")
                 context = try await loadModel(directory: directory)
                 print("[QwenTextHiddenStateProvider] Local model loaded successfully!")
-                
-                // Try to load embed_tokens from local directory
-                lyricLoader = try? LyricTokenEmbeddingLoader.load(fromDirectory: directory)
-                if lyricLoader != nil {
-                    print("[QwenTextHiddenStateProvider] LyricTokenEmbeddingLoader loaded successfully from local model")
-                }
             } catch {
                 print("[QwenTextHiddenStateProvider] Local model load failed: \(error.localizedDescription)")
                 print("[QwenTextHiddenStateProvider] Falling back to remote...")
@@ -57,14 +51,15 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
             throw QwenTextHiddenStateProviderError.unsupportedModelType(String(describing: type(of: context.model)))
         }
         
-        if lyricLoader == nil {
-            print("[QwenTextHiddenStateProvider] WARNING: Using full model forward for lyrics (no embed_tokens)")
-        }
+        // Note: We don't use LyricTokenEmbeddingLoader with the quantized model because
+        // the embed_tokens weights are stored in quantized format in safetensors.
+        // Instead, we use the full model forward for lyrics (encodeLyricHiddenStates).
+        print("[QwenTextHiddenStateProvider] Using full model forward for lyrics (quantized model)")
         
         return QwenTextHiddenStateProvider(
             model: qwenModel,
             encodeTokens: { context.tokenizer.encode(text: $0, addSpecialTokens: true) },
-            lyricEmbeddingLoader: lyricLoader
+            lyricEmbeddingLoader: nil
         )
     }
 

@@ -26,9 +26,6 @@ public final class LyricTokenEmbeddingLoader {
 
     /// Returns token embeddings for the given token IDs. Output shape [1, tokenIDs.count, hiddenSize].
     public func embed(tokenIDs: [Int]) -> MLXArray {
-        guard !tokenIDs.isEmpty else {
-            return MLXArray.zeros([1, 0, hiddenSize])
-        }
         return lock.withLock {
             let rows = tokenIDs.map { id -> MLXArray in
                 let clamped = min(max(id, 0), vocabSize - 1)
