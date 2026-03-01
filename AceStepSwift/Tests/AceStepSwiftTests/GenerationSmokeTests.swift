@@ -98,22 +98,28 @@ final class GenerationSmokeTests: XCTestCase {
             }
             
             // First check for precomputed conditioning (encoder + context)
+            // When precomputed conditioning is available from Python, use it directly
             if let conditions = Self.loadPrecomputedConditioning(latentLength: latentLength) {
-                // Use silence_latent for context latents (source latents) if available
-                let ctxLatents = silenceLatent ?? conditions.contextLatents
                 return DiTConditions(
                     encoderHiddenStates: conditions.encoderHiddenStates,
-                    contextLatents: ctxLatents,
+                    contextLatents: conditions.contextLatents,
                     encoderAttentionMask: conditions.encoderAttentionMask,
-                    nullConditionEmbedding: conditions.nullConditionEmbedding
+                    nullConditionEmbedding: conditions.nullConditionEmbedding,
+                    initialLatents: conditions.initialLatents
                 )
             }
             
             // No precomputed conditioning - build from silence_latent or zeros
+            // silence_latent has 64 channels (src_latents), we need to concatenate with chunk_masks to get 128
             let encL = 8
-            let ctxLatents = silenceLatent ?? MLXArray.zeros([1, latentLength, 128])
-            if silenceLatent != nil {
+            let ctxLatents: MLXArray
+            if let sil = silenceLatent {
+                // Concatenate silence_latent (64 ch) with zeros (64 ch) to create context_latents (128 ch)
+                let chunkMasks = MLXArray.zeros([1, latentLength, 64])
+                ctxLatents = concatenated([sil, chunkMasks], axis: 2)
                 print("[SmokeTest] Using silence_latent for context latents, shape=\(ctxLatents.shape)")
+            } else {
+                ctxLatents = MLXArray.zeros([1, latentLength, 128])
             }
             return DiTConditions(
                 encoderHiddenStates: MLXArray.zeros([1, encL, 2048]),

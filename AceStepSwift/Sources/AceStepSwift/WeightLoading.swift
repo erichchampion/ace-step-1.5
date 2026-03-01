@@ -86,15 +86,25 @@ public func loadParameters(from url: URL) throws -> ModuleParameters {
     return ModuleParameters.unflattened(flat)
 }
 
-/// Load silence latent for text2music from a safetensors file (key "latent", shape [1, T, 64]).
-/// Also checks for .pt file and logs a warning if .safetensors loading fails but .pt exists.
-/// Returns nil if neither file exists.
+/// Load silence latent for text2music from a safetensors file (key "latent").
+/// Expected shape after transpose: [1, T, 64] (time-first).
+/// Also handles [1, 64, T] (channels-first) by auto-detecting and transposing.
+/// Returns nil if file doesn't exist or has invalid shape.
 public func loadSilenceLatent(from url: URL) throws -> MLXArray? {
     let path = url.path
     guard FileManager.default.fileExists(atPath: path) else { return nil }
     let flat = try loadArrays(url: url)
     guard let latent = flat["latent"] else { return nil }
-    guard latent.ndim == 3, latent.dim(0) >= 1, latent.dim(2) == 64 else { return nil }
+    guard latent.ndim == 3, latent.dim(0) >= 1 else { return nil }
+    
+    // Auto-detect and transpose: [1, C, T] -> [1, T, C]
+    // dim(0)=1, dim(1)=64, dim(2)=15000 -> transpose to [1, 15000, 64]
+    if latent.dim(1) == 64 && latent.dim(1) < latent.dim(2) {
+        print("[loadSilenceLatent] Detected channels-first [1, 64, T], transposing to [1, T, 64]")
+        return latent.transposed(axes: [0, 2, 1])
+    }
+    
+    guard latent.dim(2) == 64 else { return nil }
     return latent
 }
 

@@ -56,16 +56,12 @@ if [ -f "$DIT_WEIGHTS_DIR/model.safetensors" ]; then
   export TEST_RUNNER_DIT_WEIGHTS_PATH="$DIT_WEIGHTS_DIR"
   echo "Using real DiT: $DIT_WEIGHTS_PATH"
   
-  # Export silence_latent.safetensors if silence_latent.pt exists (required for meaningful text2music output)
-  if [ -f "$DIT_WEIGHTS_DIR/silence_latent.pt" ] && [ ! -f "$DIT_WEIGHTS_DIR/silence_latent.safetensors" ]; then
-    echo "Exporting silence_latent.safetensors..."
-    python -c "
-import torch
-from safetensors.torch import save_file
-data = torch.load('$DIT_WEIGHTS_DIR/silence_latent.pt', weights_only=True)
-save_file({'latent': data}, '$DIT_WEIGHTS_DIR/silence_latent.safetensors')
-print('Exported silence_latent.safetensors')
-" 2>/dev/null || echo "Warning: could not export silence_latent.safetensors"
+  # Preprocess .pt files to .safetensors for Swift compatibility
+  echo "Preprocessing models for Swift..."
+  if (cd "$REPO_ROOT" && python scripts/preprocess_models_for_swift.py --checkpoints-dir "$CHECKPOINTS_DIR" --model "$(basename "$DIT_WEIGHTS_DIR")" --verbose); then
+    echo "Model preprocessing: ok"
+  else
+    echo "Model preprocessing: failed (some .pt files may not be converted)"
   fi
   if [ -f "$DIT_WEIGHTS_DIR/silence_latent.safetensors" ]; then
     echo "Using silence_latent.safetensors for source latents"

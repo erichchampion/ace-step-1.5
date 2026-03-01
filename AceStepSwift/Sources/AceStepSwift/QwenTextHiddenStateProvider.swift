@@ -5,11 +5,7 @@ import MLXLLM
 
 public protocol TextHiddenStateProvider: AnyObject {
     func encodeHiddenStates(text: String, maxLength: Int) throws -> (hiddenStates: MLXArray, attentionMask: MLXArray)
-    /// Lyric branch states for ConditionEncoder.lyricEncoder path.
-    /// Default implementation can mirror encodeHiddenStates; providers may override.
     func encodeLyricHiddenStates(text: String, maxLength: Int) throws -> (hiddenStates: MLXArray, attentionMask: MLXArray)
-    /// Token embedding branch used when a provider can expose embed_tokens directly.
-    /// Default implementation falls back to encodeLyricHiddenStates.
     func encodeTokenEmbeddings(text: String, maxLength: Int) throws -> (embeddings: MLXArray, attentionMask: MLXArray)
 }
 
@@ -20,6 +16,7 @@ public enum QwenTextHiddenStateProviderError: Error {
 /// Produces text-model hidden states using Qwen3 embedding weights/tokenizer.
 /// This mirrors the Python text encoder path at a high level: tokenize -> model -> last hidden states.
 /// When lyricEmbeddingLoader is set, encodeTokenEmbeddings uses raw token embeddings (matches Python embed_tokens).
+/// If not, falls back to using model's embedTokens directly (available on Qwen3Model).
 public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
     private let model: Qwen3Model
     private let encodeTokens: (String) -> [Int]
@@ -34,18 +31,38 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
 
     public static func load(directory: URL? = nil) async throws -> QwenTextHiddenStateProvider {
         let context: ModelContext
+        var localModelLoaded = false
+        var lyricLoader: LyricTokenEmbeddingLoader? = nil
+        
         if let directory {
-            context = try await loadModel(directory: directory)
+            do {
+                print("[QwenTextHiddenStateProvider] Attempting to load model from: \(directory.path)")
+                context = try await loadModel(directory: directory)
+                print("[QwenTextHiddenStateProvider] Local model loaded successfully!")
+                localModelLoaded = true
+                
+                // Try to load embed_tokens from local directory
+                lyricLoader = try? LyricTokenEmbeddingLoader.load(fromDirectory: directory)
+                if lyricLoader != nil {
+                    print("[QwenTextHiddenStateProvider] LyricTokenEmbeddingLoader loaded successfully from local model")
+                }
+            } catch {
+                print("[QwenTextHiddenStateProvider] Local model load failed: \(error.localizedDescription)")
+                print("[QwenTextHiddenStateProvider] Falling back to remote...")
+                context = try await loadModel(id: "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
+            }
         } else {
             context = try await loadModel(id: "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
         }
+        
         guard let qwenModel = context.model as? Qwen3Model else {
             throw QwenTextHiddenStateProviderError.unsupportedModelType(String(describing: type(of: context.model)))
         }
-        var lyricLoader: LyricTokenEmbeddingLoader?
-        if let directory {
-            lyricLoader = try? LyricTokenEmbeddingLoader.load(fromDirectory: directory)
+        
+        if lyricLoader == nil {
+            print("[QwenTextHiddenStateProvider] WARNING: Using full model forward for lyrics (no embed_tokens)")
         }
+        
         return QwenTextHiddenStateProvider(
             model: qwenModel,
             encodeTokens: { context.tokenizer.encode(text: $0, addSpecialTokens: true) },
@@ -68,7 +85,6 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
         let attentionMask = MLXArray.ones([1, tokenIDs.count])
 
         let hiddenStates = lock.withLock {
-            // Use the transformer body output (not lm_head logits) as text hidden states.
             model.model(inputIDs, cache: nil)
         }
         hiddenStates.eval()
@@ -84,15 +100,19 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
     public func encodeTokenEmbeddings(text: String, maxLength: Int = 2048) throws -> (
         embeddings: MLXArray, attentionMask: MLXArray
     ) {
+        var tokenIDs = encodeTokens(text)
+        if tokenIDs.isEmpty { tokenIDs = [0] }
+        if tokenIDs.count > maxLength { tokenIDs = Array(tokenIDs.prefix(maxLength)) }
+        
         if let loader = lyricEmbeddingLoader {
-            var tokenIDs = encodeTokens(text)
-            if tokenIDs.isEmpty { tokenIDs = [0] }
-            if tokenIDs.count > maxLength { tokenIDs = Array(tokenIDs.prefix(maxLength)) }
             let embeddings = loader.embed(tokenIDs: tokenIDs)
             embeddings.eval()
+            print("[QwenTextHiddenStateProvider] Using embed_tokens for lyrics")
             let mask = MLXArray.ones([1, tokenIDs.count])
             return (embeddings, mask)
         }
+        
+        print("[QwenTextHiddenStateProvider] WARNING: Using full model forward for lyrics (no embed_tokens)")
         let lyric = try encodeLyricHiddenStates(text: text, maxLength: maxLength)
         return (lyric.hiddenStates, lyric.attentionMask)
     }

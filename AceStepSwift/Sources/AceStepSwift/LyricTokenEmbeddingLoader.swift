@@ -5,6 +5,7 @@
 
 import Foundation
 import MLX
+import MLXLMCommon
 
 /// Embedding matrix [vocabSize, hiddenSize] and lookup for lyric token IDs.
 /// Load from the same Qwen checkpoint directory used for the text encoder.
@@ -41,6 +42,11 @@ public final class LyricTokenEmbeddingLoader {
     /// Load embedding matrix from a safetensors file. Tries common Qwen/transformers key names.
     public static func load(from url: URL) throws -> LyricTokenEmbeddingLoader {
         let flat = try loadArrays(url: url)
+        
+        // Print available keys for debugging
+        let allKeys = Array(flat.keys)
+        print("[LyricTokenEmbeddingLoader] Available keys: \(allKeys.prefix(30))")
+        
         let keys = [
             "model.embed_tokens.weight",
             "embed_tokens.weight",
@@ -64,7 +70,7 @@ public final class LyricTokenEmbeddingLoader {
         if directory.pathExtension == "safetensors" && FileManager.default.fileExists(atPath: directory.path) {
             return try load(from: directory)
         }
-        throw LyricTokenEmbeddingLoaderError.fileNotFound(directory: directory)
+        throw LyricTokenEmbeddingLoaderError.fileNotFound(directory: URL(fileURLWithPath: ""))
     }
 }
 
