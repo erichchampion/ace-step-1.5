@@ -6,6 +6,8 @@
 import Foundation
 import MLX
 
+private let apgEpsilon: Float = 1e-8
+
 /// APG: combines conditional and unconditional predictions with guidance along the orthogonal component.
 /// - Parameters:
 ///   - predCond: conditional prediction [B, T, C]
@@ -35,11 +37,11 @@ public func apgForward(
     if normThreshold > 0 {
         let diffSq = (diff * diff).sum(axis: projAxis, keepDims: true)
         let diffNorm = sqrt(diffSq)
-        let scaleFactor = minimum(MLXArray(1.0 as Float), normThreshold / (diffNorm + 1e-8))
+        let scaleFactor = minimum(MLXArray(1.0 as Float), normThreshold / (diffNorm + apgEpsilon))
         diff = diff * scaleFactor
     }
     let condSq = (predCond * predCond).sum(axis: projAxis, keepDims: true)
-    let v1 = predCond / (sqrt(condSq + 1e-8))
+    let v1 = predCond / (sqrt(condSq + apgEpsilon))
     let parallel = (diff * v1).sum(axis: projAxis, keepDims: true) * v1
     let orthogonal = diff - parallel
     return predCond + (guidanceScale - 1) * orthogonal

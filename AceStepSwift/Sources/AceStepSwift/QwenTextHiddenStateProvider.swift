@@ -31,6 +31,8 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
         self.lyricEmbeddingLoader = lyricEmbeddingLoader
     }
 
+    private static let defaultQuantizedModelID = "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+
     /// Load from a quantized MLX-community model directory (uses MLXLLM's loadModel).
     public static func load(directory: URL? = nil) async throws -> QwenTextHiddenStateProvider {
         let context: ModelContext
@@ -44,10 +46,10 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
             } catch {
                 print("[QwenTextHiddenStateProvider] Local model load failed: \(error.localizedDescription)")
                 print("[QwenTextHiddenStateProvider] Falling back to remote...")
-                context = try await loadModel(id: "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
+                context = try await loadModel(id: defaultQuantizedModelID)
             }
         } else {
-            context = try await loadModel(id: "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ")
+            context = try await loadModel(id: defaultQuantizedModelID)
         }
         
         guard let qwenModel = context.model as? Qwen3Model else {
@@ -125,6 +127,11 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
         )
     }
 
+    /// Lock-free model forward pass. Callers MUST hold `lock`.
+    private func _forwardUnlocked(inputIDs: MLXArray) -> MLXArray {
+        model.model(inputIDs, cache: nil)
+    }
+
     public func encodeHiddenStates(text: String, maxLength: Int = 256) throws -> (
         hiddenStates: MLXArray, attentionMask: MLXArray
     ) {
@@ -140,7 +147,7 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
         let attentionMask = MLXArray.ones([1, tokenIDs.count])
 
         let hiddenStates = lock.withLock {
-            model.model(inputIDs, cache: nil)
+            _forwardUnlocked(inputIDs: inputIDs)
         }
         hiddenStates.eval()
         return (hiddenStates, attentionMask)
@@ -176,10 +183,12 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
         if let embeddingLayer = model.model.modules().compactMap({ $0 as? Embedding }).first {
             embeddings = embeddingLayer(inputIDs)
         } else {
-            // defer will unlock; fall through to full forward
+            // Fallback: full forward pass. Lock is already held, so call _forwardUnlocked directly.
             print("[QwenTextHiddenStateProvider] FAIL: Could not find Embedding module, falling back to full forward")
-            let lyric = try encodeHiddenStates(text: text, maxLength: maxLength)
-            return (lyric.hiddenStates, lyric.attentionMask)
+            let hiddenStates = _forwardUnlocked(inputIDs: inputIDs)
+            hiddenStates.eval()
+            let mask = MLXArray.ones([1, tokenIDs.count])
+            return (hiddenStates, mask)
         }
         embeddings.eval()
         let mask = MLXArray.ones([1, tokenIDs.count])

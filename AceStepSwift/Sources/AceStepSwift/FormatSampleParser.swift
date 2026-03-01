@@ -83,11 +83,16 @@ public enum FormatSampleParser {
         return after.trimmingCharacters(in: .whitespaces)
     }
 
-    /// Build FormatSampleResult from raw output and fallback lyrics.
-    public static func parseToFormatSampleResult(outputText: String, fallbackLyrics: String) -> FormatSampleResult {
-        let (metadata, extractedLyrics) = parseLMOutput(outputText)
-        let lyrics = extractedLyrics.isEmpty ? fallbackLyrics : extractedLyrics
+    private struct CommonFields {
+        let bpm: Int?
+        let duration: Double?
+        let caption: String
+        let keyscale: String
+        let language: String
+        let timesignature: String
+    }
 
+    private static func extractCommonFields(from metadata: [String: Any]) -> CommonFields {
         var bpm: Int?
         if let v = metadata["bpm"] as? Int { bpm = v }
         else if let v = metadata["bpm"] as? String, let i = Int(v) { bpm = i }
@@ -97,19 +102,30 @@ public enum FormatSampleParser {
         else if let v = metadata["duration"] as? Double { duration = v }
         else if let v = metadata["duration"] as? String, let d = Double(v) { duration = d }
 
-        let caption = (metadata["caption"] as? String) ?? ""
-        let keyscale = (metadata["keyscale"] as? String) ?? ""
-        let language = (metadata["language"] as? String) ?? ""
-        let timesignature = (metadata["timesignature"] as? String) ?? ""
-
-        return FormatSampleResult(
-            caption: caption,
-            lyrics: lyrics,
+        return CommonFields(
             bpm: bpm,
             duration: duration,
-            keyscale: keyscale,
-            language: language,
-            timesignature: timesignature,
+            caption: (metadata["caption"] as? String) ?? "",
+            keyscale: (metadata["keyscale"] as? String) ?? "",
+            language: (metadata["language"] as? String) ?? "",
+            timesignature: (metadata["timesignature"] as? String) ?? ""
+        )
+    }
+
+    /// Build FormatSampleResult from raw output and fallback lyrics.
+    public static func parseToFormatSampleResult(outputText: String, fallbackLyrics: String) -> FormatSampleResult {
+        let (metadata, extractedLyrics) = parseLMOutput(outputText)
+        let lyrics = extractedLyrics.isEmpty ? fallbackLyrics : extractedLyrics
+        let fields = extractCommonFields(from: metadata)
+
+        return FormatSampleResult(
+            caption: fields.caption,
+            lyrics: lyrics,
+            bpm: fields.bpm,
+            duration: fields.duration,
+            keyscale: fields.keyscale,
+            language: fields.language,
+            timesignature: fields.timesignature,
             statusMessage: "OK",
             success: true,
             error: nil
@@ -120,29 +136,16 @@ public enum FormatSampleParser {
     public static func parseToCreateSampleResult(outputText: String, instrumental: Bool) -> CreateSampleResult {
         let (metadata, extractedLyrics) = parseLMOutput(outputText)
         let lyrics = extractedLyrics.isEmpty ? (instrumental ? "[Instrumental]" : "") : extractedLyrics
-
-        var bpm: Int?
-        if let v = metadata["bpm"] as? Int { bpm = v }
-        else if let v = metadata["bpm"] as? String, let i = Int(v) { bpm = i }
-
-        var duration: Double?
-        if let v = metadata["duration"] as? Int { duration = Double(v) }
-        else if let v = metadata["duration"] as? Double { duration = v }
-        else if let v = metadata["duration"] as? String, let d = Double(v) { duration = d }
-
-        let caption = (metadata["caption"] as? String) ?? ""
-        let keyscale = (metadata["keyscale"] as? String) ?? ""
-        let language = (metadata["language"] as? String) ?? ""
-        let timesignature = (metadata["timesignature"] as? String) ?? ""
+        let fields = extractCommonFields(from: metadata)
 
         return CreateSampleResult(
-            caption: caption,
+            caption: fields.caption,
             lyrics: lyrics,
-            bpm: bpm,
-            duration: duration,
-            keyscale: keyscale,
-            language: language,
-            timesignature: timesignature,
+            bpm: fields.bpm,
+            duration: fields.duration,
+            keyscale: fields.keyscale,
+            language: fields.language,
+            timesignature: fields.timesignature,
             instrumental: instrumental,
             statusMessage: "OK",
             success: true,
