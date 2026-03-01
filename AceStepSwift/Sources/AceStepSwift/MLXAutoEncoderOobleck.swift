@@ -37,20 +37,23 @@ public class MLXAutoEncoderOobleck: Module {
         super.init()
     }
 
-    /// Encode audio -> mean latent (no sampling). [B, L_audio, C_audio] -> [B, L_latent, C_latent]. NLC.
-    public func encodeMean(audioNLC: MLXArray) -> MLXArray {
+    private func getMeanAndScale(audioNLC: MLXArray) -> (MLXArray, MLXArray) {
         let h = encoder(audioNLC)
         let parts = split(h, parts: 2, axis: -1)
-        return parts[0]
+        return (parts[0], parts[1])
+    }
+
+    /// Encode audio -> mean latent (no sampling). [B, L_audio, C_audio] -> [B, L_latent, C_latent]. NLC.
+    public func encodeMean(audioNLC: MLXArray) -> MLXArray {
+        return getMeanAndScale(audioNLC: audioNLC).0
     }
 
     /// Encode audio -> sample latent (mean + std * noise). [B, L_audio, C_audio] -> [B, L_latent, C_latent]. NLC.
     public func encodeAndSample(audioNLC: MLXArray) -> MLXArray {
-        let h = encoder(audioNLC)
-        let parts = split(h, parts: 2, axis: -1)
-        let mean = parts[0]
-        let scale = parts[1]
-        let std = MLX.where(scale .> 20, scale, MLX.log(1 + MLX.exp(scale)) + 1e-4)
+        let (mean, scale) = getMeanAndScale(audioNLC: audioNLC)
+        let logStdClampThreshold: Float = 20.0
+        let epsilon: Float = 1e-4
+        let std = MLX.where(scale .> logStdClampThreshold, scale, MLX.log(1 + MLX.exp(scale)) + epsilon)
         let noise = MLXRandom.normal(mean.shape)
         return mean + std * noise
     }
