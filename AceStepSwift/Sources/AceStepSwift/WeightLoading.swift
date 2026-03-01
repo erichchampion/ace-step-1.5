@@ -79,6 +79,24 @@ public func loadDiTParametersForDecoder(from url: URL) throws -> ModuleParameter
     return ModuleParameters.unflattened(decoderFlat)
 }
 
+/// Prefix for full-model checkpoint encoder subtree (strip this to get encoder-only keys for update).
+private let encoderKeyPrefix = "encoder."
+
+/// Load DiT condition-encoder parameters suitable for conditionEncoder.update(parameters:).
+/// Strips the "encoder." prefix so ConditionEncoder receives textProjector.*, lyricEncoder.*, timbreEncoder.* etc.
+/// If no key has the "encoder." prefix, returns the full parameters unchanged.
+public func loadDiTParametersForEncoder(from url: URL) throws -> ModuleParameters {
+    let params = try loadDiTParameters(from: url)
+    let flat = params.flattened()
+    let encoderFlat: [(String, MLXArray)] = flat
+        .filter { $0.0.hasPrefix(encoderKeyPrefix) }
+        .map { (String($0.0.dropFirst(encoderKeyPrefix.count)), $0.1) }
+    if encoderFlat.isEmpty {
+        return params
+    }
+    return ModuleParameters.unflattened(encoderFlat)
+}
+
 /// Load flat [String: MLXArray] from a safetensors file and return nested ModuleParameters.
 /// Use with `model.update(parameters: try loadParameters(from: url))`.
 public func loadParameters(from url: URL) throws -> ModuleParameters {
