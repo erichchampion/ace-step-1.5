@@ -1,7 +1,9 @@
 import Foundation
 import MLX
+import MLXNN
 import MLXLMCommon
 import MLXLLM
+import Tokenizers
 
 public protocol TextHiddenStateProvider: AnyObject {
     func encodeHiddenStates(text: String, maxLength: Int) throws -> (hiddenStates: MLXArray, attentionMask: MLXArray)
@@ -29,6 +31,7 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
         self.lyricEmbeddingLoader = lyricEmbeddingLoader
     }
 
+    /// Load from a quantized MLX-community model directory (uses MLXLLM's loadModel).
     public static func load(directory: URL? = nil) async throws -> QwenTextHiddenStateProvider {
         let context: ModelContext
         
@@ -51,14 +54,73 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
             throw QwenTextHiddenStateProviderError.unsupportedModelType(String(describing: type(of: context.model)))
         }
         
-        // Note: We don't use LyricTokenEmbeddingLoader with the quantized model because
-        // the embed_tokens weights are stored in quantized format in safetensors.
-        // Instead, we use the full model forward for lyrics (encodeLyricHiddenStates).
-        print("[QwenTextHiddenStateProvider] Using full model forward for lyrics (quantized model)")
+        print("[QwenTextHiddenStateProvider] Using model.modules() Embedding for lyrics (quantized model)")
         
         return QwenTextHiddenStateProvider(
             model: qwenModel,
             encodeTokens: { context.tokenizer.encode(text: $0, addSpecialTokens: true) },
+            lyricEmbeddingLoader: nil
+        )
+    }
+
+    /// Load from a full-precision HuggingFace Qwen3-Embedding model directory (PyTorch safetensors format).
+    /// This is the preferred path: full-precision BF16 weights produce correct embedding magnitudes
+    /// matching the Python pipeline's text_encoder.embed_tokens() output.
+    public static func loadFullPrecision(directory: URL) async throws -> QwenTextHiddenStateProvider {
+        print("[QwenTextHiddenStateProvider] Loading full-precision model from: \(directory.path)")
+
+        // 1. Build Qwen3Configuration via JSON decoding (the memberwise init is internal to MLXLLM).
+        //    The full-precision model's config.json is a sentence-transformers pooling config,
+        //    not the Qwen architecture config, so we encode the known values manually.
+        let configJSON = """
+        {
+            "hidden_size": 1024,
+            "num_hidden_layers": 28,
+            "intermediate_size": 3072,
+            "num_attention_heads": 16,
+            "rms_norm_eps": 1e-6,
+            "vocab_size": 151669,
+            "num_key_value_heads": 8,
+            "rope_theta": 1000000,
+            "head_dim": 128,
+            "tie_word_embeddings": true,
+            "max_position_embeddings": 32768
+        }
+        """.data(using: .utf8)!
+        let config = try JSONDecoder().decode(Qwen3Configuration.self, from: configJSON)
+
+        // 2. Create model
+        let model = Qwen3Model(config)
+
+        // 3. Load safetensors weights; add "model." prefix since the PyTorch safetensors
+        //    uses flat keys (embed_tokens.weight, layers.0...) but Qwen3Model wraps them
+        //    under its `model` (Qwen3ModelInner) property.
+        let weightsURL = directory.appendingPathComponent("model.safetensors")
+        let rawWeights = try loadArrays(url: weightsURL)
+        let sanitized = model.sanitize(weights: rawWeights)
+        let prefixed: [String: MLXArray] = Dictionary(uniqueKeysWithValues:
+            sanitized.map { (key, value) in
+                let newKey = "model.\(key)"
+                return (newKey, value)
+            }
+        )
+        let params = ModuleParameters.unflattened(prefixed)
+        model.update(parameters: params)
+        eval(model.parameters())
+        print("[QwenTextHiddenStateProvider] Full-precision model weights loaded (\(rawWeights.count) tensors)")
+
+        // 4. Load tokenizer
+        let tokenizerURL = directory.appendingPathComponent("tokenizer.json")
+        guard FileManager.default.fileExists(atPath: tokenizerURL.path) else {
+            throw QwenTextHiddenStateProviderError.unsupportedModelType("tokenizer.json not found in \(directory.path)")
+        }
+        let tokenizer = try await AutoTokenizer.from(modelFolder: directory)
+
+        print("[QwenTextHiddenStateProvider] Full-precision Qwen3 ready (embed_tokens is unquantized Embedding)")
+
+        return QwenTextHiddenStateProvider(
+            model: model,
+            encodeTokens: { tokenizer.encode(text: $0, addSpecialTokens: true) },
             lyricEmbeddingLoader: nil
         )
     }
@@ -105,20 +167,18 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
             return (embeddings, mask)
         }
         
-        print("[QwenTextHiddenStateProvider] Using model.flattenedParameters() for lyrics")
+        print("[QwenTextHiddenStateProvider] Using model.modules() to find Embedding for lyrics")
         let inputIDs = MLXArray(tokenIDs, [1, tokenIDs.count])
         let embeddings: MLXArray
         lock.lock()
         defer { lock.unlock() }
-        let flat = model.parameters().flattened()
-        if let match = flat.first(where: { $0.0 == "model.embed_tokens.weight" || $0.0 == "embed_tokens.weight" }) {
-            // Manual embedding lookup: shape [vocab_size, hidden_dim]
-            let weight = match.1
-            embeddings = weight[inputIDs]
+        
+        if let embeddingLayer = model.model.modules().compactMap({ $0 as? Embedding }).first {
+            embeddings = embeddingLayer(inputIDs)
         } else {
-            print("[QwenTextHiddenStateProvider] FAIL: Could not find embed_tokens.weight, falling back to full forward")
-            lock.unlock()
-            let lyric = try encodeLyricHiddenStates(text: text, maxLength: maxLength)
+            // defer will unlock; fall through to full forward
+            print("[QwenTextHiddenStateProvider] FAIL: Could not find Embedding module, falling back to full forward")
+            let lyric = try encodeHiddenStates(text: text, maxLength: maxLength)
             return (lyric.hiddenStates, lyric.attentionMask)
         }
         embeddings.eval()
