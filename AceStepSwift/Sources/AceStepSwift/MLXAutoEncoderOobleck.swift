@@ -19,7 +19,7 @@ public class MLXAutoEncoderOobleck: Module {
         downsamplingRatios: [Int]? = nil,
         channelMultiples: [Int]? = nil
     ) {
-        let ratios = downsamplingRatios ?? [2, 4, 4, 8, 8]
+        let ratios = downsamplingRatios ?? [2, 4, 4, 6, 10]
         let multiples = channelMultiples ?? [1, 2, 4, 8, 16]
         self.encoder = VAEOobleckEncoder(
             encoderHiddenSize: encoderHiddenSize,
