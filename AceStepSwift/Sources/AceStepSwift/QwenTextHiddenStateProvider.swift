@@ -31,7 +31,6 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
 
     public static func load(directory: URL? = nil) async throws -> QwenTextHiddenStateProvider {
         let context: ModelContext
-        var localModelLoaded = false
         var lyricLoader: LyricTokenEmbeddingLoader? = nil
         
         if let directory {
@@ -39,7 +38,6 @@ public final class QwenTextHiddenStateProvider: TextHiddenStateProvider {
                 print("[QwenTextHiddenStateProvider] Attempting to load model from: \(directory.path)")
                 context = try await loadModel(directory: directory)
                 print("[QwenTextHiddenStateProvider] Local model loaded successfully!")
-                localModelLoaded = true
                 
                 // Try to load embed_tokens from local directory
                 lyricLoader = try? LyricTokenEmbeddingLoader.load(fromDirectory: directory)
