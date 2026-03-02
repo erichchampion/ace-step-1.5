@@ -355,11 +355,45 @@ class LLMHandler:
                 self.llm = self.llm.to(device).to(self.dtype)
             else:
                 self.llm = self.llm.to("cpu").to(self.dtype)
+            
+            # Attempt to apply torchao dynamic quantization if on GPU
+            quantization_applied = False
+            if device in ["cuda", "mps", "xpu"] and not self.offload_to_cpu:
+                try:
+                    import sys
+                    import platform
+                    import torchao
+                    from torchao.quantization import quantize_, int8_weight_only, int4_weight_only
+                    
+                    # Detect iOS vs macOS. Python 3.13+ uses 'ios', but we also check platform names just in case
+                    is_ios = sys.platform == "ios" or platform.system() == "iOS"
+
+                    if is_ios:
+                        logger.info(f"Applying torchao int4_weight_only quantization for iOS on {device}...")
+                        quantize_(self.llm, int4_weight_only())
+                        self.quantization_type = "4-bit (torchao)"
+                    else:
+                        logger.info(f"Applying torchao int8_weight_only quantization for macOS/PC on {device}...")
+                        quantize_(self.llm, int8_weight_only())
+                        self.quantization_type = "8-bit (torchao)"
+
+                    quantization_applied = True
+                    logger.info("Successfully applied torchao quantization.")
+                except ImportError:
+                    logger.info("torchao not installed. Skipping dynamic quantization.")
+                except Exception as e:
+                    logger.warning(f"Failed to apply torchao quantization: {e}. Falling back to unquantized model.")
+
             self.llm.eval()
             self.llm_backend = "pt"
             self.llm_initialized = True
-            logger.info(f"5Hz LM initialized successfully using PyTorch backend on {device}")
-            status_msg = f"✅ 5Hz LM initialized successfully\nModel: {model_path}\nBackend: PyTorch\nDevice: {device}"
+            
+            quantization_desc = getattr(self, "quantization_type", "8-bit/4-bit Quantized") if quantization_applied else ""
+            quant_status = f" ({quantization_desc})" if quantization_applied else ""
+            
+            logger.info(f"5Hz LM initialized successfully{quant_status} using PyTorch backend on {device}")
+            status_msg = f"✅ 5Hz LM initialized successfully{quant_status}\nModel: {model_path}\nBackend: PyTorch\nDevice: {device}"
+            
             return True, status_msg
         except Exception as e:
             return False, f"❌ Error initializing 5Hz LM: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
