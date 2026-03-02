@@ -58,6 +58,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     private let decoder: VAEDecoder
     private let sampleRate: Int
     private let conditioningProvider: ConditioningProvider?
+    public let maxDuration: Double
 
     public var isInitialized: Bool { true }
 
@@ -66,16 +67,19 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     ///   - decoder: VAE decode latent → audio (e.g. FakeVAEDecoder or MLXVAEDecoder).
     ///   - sampleRate: Output waveform sample rate (default 48000).
     ///   - conditioningProvider: When non-nil, called with (params, latentLength, sampleRate) to build DiTConditions. Return encoderHiddenStates [B, encL, 2048] and contextLatents [B, latentLength, 128] for meaningful output. When nil, zeros are used and output is not meaningful (matches Python only when real conditioning from prepare_condition is passed).
+    ///   - maxDuration: Maximum duration supported by this pipeline instance.
     public init(
         stepper: DiffusionStepper,
         decoder: VAEDecoder,
         sampleRate: Int = AceStepConstants.defaultSampleRate,
-        conditioningProvider: ConditioningProvider? = nil
+        conditioningProvider: ConditioningProvider? = nil,
+        maxDuration: Double = 120.0
     ) {
         self.stepper = stepper
         self.decoder = decoder
         self.sampleRate = sampleRate
         self.conditioningProvider = conditioningProvider
+        self.maxDuration = maxDuration
     }
 
     public func run(params: GenerationParams, config: GenerationConfig, progress: ((Double, String) -> Void)?) async throws -> GenerationResult {

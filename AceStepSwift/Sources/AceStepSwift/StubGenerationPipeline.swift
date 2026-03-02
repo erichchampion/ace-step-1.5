@@ -6,6 +6,7 @@ import Foundation
 
 public final class StubGenerationPipeline: GenerationPipeline {
     public var isInitialized: Bool { true }
+    public var maxDuration: Double { 120.0 }
 
     public init() {}
 

@@ -6,5 +6,6 @@ import Foundation
 
 public protocol GenerationPipeline: AnyObject {
     var isInitialized: Bool { get }
+    var maxDuration: Double { get }
     func run(params: GenerationParams, config: GenerationConfig, progress: ((Double, String) -> Void)?) async throws -> GenerationResult
 }
