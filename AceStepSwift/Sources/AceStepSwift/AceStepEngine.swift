@@ -3,8 +3,25 @@
  */
 
 import Foundation
-
+#if canImport(MLX)
+import MLX
+#endif
 public enum AceStepEngine {
+
+    /// Configure MLX Metal Memory Limits (in bytes). Call this once at app startup.
+    /// - Parameters:
+    ///   - memoryLimit: Maximum memory MLX is allowed to allocate on the GPU (e.g. 4 * 1024 * 1024 * 1024 for 4GB).
+    ///   - cacheLimit: Maximum memory MLX will keep in its Metal buffer cache (e.g. 1 * 1024 * 1024 * 1024 for 1GB).
+    public static func configureMLXMemory(memoryLimit: Int? = nil, cacheLimit: Int? = nil) {
+        #if canImport(MLX)
+        if let limit = memoryLimit {
+            MLX.GPU.set(memoryLimit: limit)
+        }
+        if let limit = cacheLimit {
+            MLX.GPU.set(cacheLimit: limit)
+        }
+        #endif
+    }
 
     /// Generate music from params. Returns GenerationResult with audios or error.
     public static func generateMusic(

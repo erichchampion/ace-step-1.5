@@ -25,4 +25,10 @@ public final class DiTCrossAttentionCache {
     public func get(layerIdx: Int) -> (MLXArray, MLXArray) {
         (keys[layerIdx]!, values[layerIdx]!)
     }
+    
+    public func clear() {
+        keys.removeAll()
+        values.removeAll()
+        updated.removeAll()
+    }
 }

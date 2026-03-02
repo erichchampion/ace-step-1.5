@@ -135,6 +135,8 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         )
         #endif
 
+        MLX.GPU.clearCache()
+        
         var apgMomentumState: [String: MLXArray]? = [:]
         for (stepIdx, timestepVal) in schedule.enumerated() {
             let nextT: Float? = (stepIdx + 1 < schedule.count) ? Float(schedule[stepIdx + 1]) : nil
@@ -158,6 +160,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         }
 
         progress?(0.95, "Decoding")
+        MLX.GPU.clearCache()
         var decodeLatent = xt
         if params.latentShift != 0.0 || params.latentRescale != 1.0 {
             decodeLatent = decodeLatent * Float(params.latentRescale) + Float(params.latentShift)
@@ -204,6 +207,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         )
         #endif
         audio.eval()
+        MLX.GPU.clearCache()
 
         let audios = buildAudiosFromDecoded(audio)
         progress?(1.0, "Done")

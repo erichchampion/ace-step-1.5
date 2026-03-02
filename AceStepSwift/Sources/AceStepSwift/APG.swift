@@ -44,6 +44,10 @@ public func apgForward(
     let v1 = predCond / (sqrt(condSq + apgEpsilon))
     let parallel = (diff * v1).sum(axis: projAxis, keepDims: true) * v1
     let orthogonal = diff - parallel
+    
+    // Explicitly release intermediate arrays to free Metal cache blocks immediately
+    diff = MLXArray(0.0)
+    
     return predCond + (guidanceScale - 1) * orthogonal
 }
 

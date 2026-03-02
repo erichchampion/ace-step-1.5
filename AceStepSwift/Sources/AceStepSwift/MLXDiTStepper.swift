@@ -34,9 +34,11 @@ public final class MLXDiTStepper: DiffusionStepper {
     ) -> MLXArray {
         let b = currentLatent.dim(0)
         let t = currentLatent.dim(1)
-
-        let enc = conditions.encoderHiddenStates ?? MLXArray.zeros([b, 1, ditEncoderHiddenSize])
-        let ctx = conditions.contextLatents ?? MLXArray.zeros([b, t, ditContextChannels])
+        
+        // Since MLX Swift's zeros() requires a typed metatype (T.Type), we explicitly use Float16.self
+        // to half the memory footprint of these condition buffers compared to default Float32.
+        let enc = conditions.encoderHiddenStates ?? MLXArray.zeros([b, 1, ditEncoderHiddenSize], type: Float16.self)
+        let ctx = conditions.contextLatents ?? MLXArray.zeros([b, t, ditContextChannels], type: Float16.self)
 
         let timestepArr = MLXArray([Float](repeating: timestep, count: b))
         // Match Python: timestep_r = current timestep so (timestep - timestep_r) = 0 in decoder.
@@ -69,5 +71,9 @@ public final class MLXDiTStepper: DiffusionStepper {
         } else {
             return currentLatent - vt * timestep
         }
+    }
+
+    public func clearCache() {
+        cache.clear()
     }
 }
