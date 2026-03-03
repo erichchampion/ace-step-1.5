@@ -257,6 +257,5 @@ AceStepSwift/.swiftpm/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
-generation_smoke_output/conditioning/context_latents.bin
-generation_smoke_output/conditioning/encoder_hidden_states.bin
-generation_smoke_output/conditioning/initial_noise.bin
+generation_smoke_output/
+quantized_checkpoints_coreml/
