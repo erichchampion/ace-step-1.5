@@ -493,8 +493,8 @@ def main():
                     example_input = (torch.zeros((1, 10), dtype=torch.int32), torch.ones((1, 10), dtype=torch.int32))
 
                 inputs_schema = [
-                    ct.TensorType(name="input_ids", shape=(1, 10), dtype=np.int32),
-                    ct.TensorType(name="attention_mask", shape=(1, 10), dtype=np.int32)
+                    ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(1, 4096)), dtype=np.int32),
+                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(1, 4096)), dtype=np.int32)
                 ]
                 outputs_schema = [ct.TensorType(name="logits")]
 
