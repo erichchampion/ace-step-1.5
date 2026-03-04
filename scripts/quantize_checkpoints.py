@@ -195,6 +195,7 @@ def main():
                 
                 # Patch the active component classes directly to avoid HuggingFace cache trickery
                 if hasattr(model, 'encoder') and hasattr(model.encoder, 'timbre_encoder'):
+                    # Patch the class of the actual instance to ensure it takes effect
                     timbre_cls = type(model.encoder.timbre_encoder)
                     def patched_unpack(self, timbre_embs_packed, refer_audio_order_mask):
                         N, d = timbre_embs_packed.shape
@@ -202,50 +203,78 @@ def main():
                         new_mask = torch.ones((1, N), dtype=torch.long, device=timbre_embs_packed.device)
                         return timbre_embs_unpack, new_mask
                     timbre_cls.unpack_timbre_embeddings = patched_unpack
+                    print("  [Patch] Applied unpack_timbre_embeddings patch.")
                 
                 if hasattr(model, 'decoder'):
+                    # Patch the DiT model/decoder class directly
                     decoder_cls = type(model.decoder)
                     DecoderMod = sys.modules[decoder_cls.__module__]
+                    
                     if not getattr(decoder_cls, "_source_patched", False):
-                        decoder_cls._source_patched = True
                         import inspect
                         # We must rewrite the source code of the class to remove PyTorch JIT 
                         # tracer traps (Boolean tensor to scalar casts, like modulo operations on shapes).
                         src = inspect.getsource(decoder_cls)
                         
                         # 1. Bypass dynamic shape modulo tests
-                        src = src.replace(
-                            "if hidden_states.shape[1] % self.patch_size != 0:", 
-                            "if False: # patched out to avoid Tracer boolean cast"
-                        )
+                        if "hidden_states.shape[1] % self.patch_size != 0:" in src:
+                            src = src.replace(
+                                "if hidden_states.shape[1] % self.patch_size != 0:", 
+                                "if False: # patched out to avoid Tracer boolean cast"
+                            )
+                            print("  [Patch] Bypassed patch_size modulo test.")
+                            
                         # 2. Bypass boolean cast in max() dimension evaluation
-                        src = src.replace(
-                            "max_len = max(seq_len, encoder_seq_len)",
-                            "max_len = seq_len + encoder_seq_len # patched out for tracer boolean cast"
-                        )
+                        if "max_len = max(seq_len, encoder_seq_len)" in src:
+                            src = src.replace(
+                                "max_len = max(seq_len, encoder_seq_len)",
+                                "max_len = seq_len + encoder_seq_len # patched out for tracer boolean cast"
+                            )
+                            print("  [Patch] Bypassed max_len boolean cast.")
+                        
                         import textwrap
                         src = textwrap.dedent(src)
                         local_env = {}
                         exec(src, DecoderMod.__dict__, local_env)
                         
+                        # Re-bind the new class to the module and update the instance's class
+                        # Note: We use the name of the class from the src to find it in local_env
+                        cls_name = decoder_cls.__name__
+                        if cls_name in local_env:
+                            new_cls = local_env[cls_name]
+                            new_cls._source_patched = True
+                            setattr(DecoderMod, cls_name, new_cls)
+                            # CRITICAL: Re-bind the instance's class so existing objects use the patched methods
+                            model.decoder.__class__ = new_cls
+                        
                         # Apply patches to AceStepAttention to stop coremltools from crashing on aten::Int list packing
                         if hasattr(DecoderMod, "AceStepAttention"):
                             attn_cls = DecoderMod.AceStepAttention
                             attn_src = inspect.getsource(attn_cls)
+                            
                             # Bypass coremltools int() cast error when python slices a shape tuple
-                            attn_src = attn_src.replace(
-                                "input_shape = hidden_states.shape[:-1]",
-                                "input_shape = (hidden_states.shape[0], hidden_states.shape[1]) # patched out to avoid aten::Int"
-                            )
+                            if "input_shape = hidden_states.shape[:-1]" in attn_src:
+                                attn_src = attn_src.replace(
+                                    "input_shape = hidden_states.shape[:-1]",
+                                    "input_shape = (hidden_states.shape[0], hidden_states.shape[1]) # patched out to avoid aten::Int"
+                                )
+                                print("  [Patch] Fixed input_shape slice.")
+                                
                             # Remove -1 from shapes to prevent coremltools from running int() on SymInts to infer shapes
-                            attn_src = attn_src.replace(
-                                "hidden_shape = (*input_shape, -1, self.head_dim)",
-                                "query_shape = (*input_shape, self.config.num_attention_heads, self.head_dim)\n        kv_shape = (*input_shape, self.config.num_key_value_heads, self.head_dim)"
-                            )
-                            attn_src = attn_src.replace(
-                                "encoder_hidden_shape = (*encoder_hidden_states.shape[:-1], -1, self.head_dim)",
-                                "query_enc_shape = (*encoder_hidden_states.shape[:-1], self.config.num_attention_heads, self.head_dim)\n            kv_enc_shape = (*encoder_hidden_states.shape[:-1], self.config.num_key_value_heads, self.head_dim)"
-                            )
+                            if "hidden_shape = (*input_shape, -1, self.head_dim)" in attn_src:
+                                attn_src = attn_src.replace(
+                                    "hidden_shape = (*input_shape, -1, self.head_dim)",
+                                    "query_shape = (*input_shape, self.config.num_attention_heads, self.head_dim)\n        kv_shape = (*input_shape, self.config.num_key_value_heads, self.head_dim)"
+                                )
+                                print("  [Patch] Fixed self-attn hidden_shape.")
+                                
+                            if "encoder_hidden_shape = (*encoder_hidden_states.shape[:-1], -1, self.head_dim)" in attn_src:
+                                attn_src = attn_src.replace(
+                                    "encoder_hidden_shape = (*encoder_hidden_states.shape[:-1], -1, self.head_dim)",
+                                    "query_enc_shape = (*encoder_hidden_states.shape[:-1], self.config.num_attention_heads, self.head_dim)\n            kv_enc_shape = (*encoder_hidden_states.shape[:-1], self.config.num_key_value_heads, self.head_dim)"
+                                )
+                                print("  [Patch] Fixed cross-attn hidden_shape.")
+                                
                             # Patch self-attention views
                             attn_src = attn_src.replace(
                                 "self.q_proj(hidden_states).view(hidden_shape)",
@@ -259,6 +288,7 @@ def main():
                                 "self.v_proj(hidden_states).view(hidden_shape)",
                                 "self.v_proj(hidden_states).view(kv_shape)"
                             )
+                            
                             # Patch cross-attention views
                             attn_src = attn_src.replace(
                                 "self.q_proj(hidden_states).view(encoder_hidden_shape)",
@@ -272,20 +302,34 @@ def main():
                                 "self.v_proj(encoder_hidden_states).view(encoder_hidden_shape)",
                                 "self.v_proj(encoder_hidden_states).view(kv_enc_shape)"
                             )
-                            attn_src = attn_src.replace(
-                                "attn_output = attn_output.reshape(*input_shape, -1).contiguous()",
-                                "attn_output = attn_output.reshape(hidden_states.shape[0], hidden_states.shape[1], self.config.num_attention_heads * self.head_dim).contiguous() # patched out to avoid aten::Int"
-                            )
-                            # Patch RoPE half_dim to integer to avoid aten::Int errors
-                            attn_src = attn_src.replace(
-                                "query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)",
-                                "query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, half_dim=self.head_dim // 2)"
-                            )
-                            exec(textwrap.dedent(attn_src), DecoderMod.__dict__, local_env)
-                            setattr(DecoderMod, "AceStepAttention", local_env["AceStepAttention"])
                             
-                            # Patch the method globally so all existing instances pick it up
-                            DecoderMod.AceStepAttention.forward = local_env["AceStepAttention"].forward
+                            if "attn_output = attn_output.reshape(*input_shape, -1).contiguous()" in attn_src:
+                                attn_src = attn_src.replace(
+                                    "attn_output = attn_output.reshape(*input_shape, -1).contiguous()",
+                                    "attn_output = attn_output.reshape(hidden_states.shape[0], hidden_states.shape[1], self.config.num_attention_heads * self.head_dim).contiguous() # patched out to avoid aten::Int"
+                                )
+                                print("  [Patch] Fixed attn_output reshape.")
+                            
+                            # Patch RoPE half_dim to integer to avoid aten::Int errors
+                            if "query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)" in attn_src:
+                                attn_src = attn_src.replace(
+                                    "query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)",
+                                    "query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, half_dim=self.head_dim // 2)"
+                                )
+                                print("  [Patch] Fixed RoPE half_dim.")
+                            
+                            local_env_attn = {}
+                            exec(textwrap.dedent(attn_src), DecoderMod.__dict__, local_env_attn)
+                            patched_attn_cls = local_env_attn["AceStepAttention"]
+                            setattr(DecoderMod, "AceStepAttention", patched_attn_cls)
+                            
+                            # Important: Since DiTModel creates its layers in __init__, we must also
+                            # swap the class on all existing attention modules within those layers.
+                            for layer in model.decoder.layers:
+                                if hasattr(layer, 'self_attn'):
+                                    layer.self_attn.__class__ = patched_attn_cls
+                                if hasattr(layer, 'cross_attn'):
+                                    layer.cross_attn.__class__ = patched_attn_cls
                         
                         # Apply a secondary patch to `eager_attention_forward` to strip dynamic modulo tests from Qwen3
                         from transformers.models.qwen3.modeling_qwen3 import eager_attention_forward
