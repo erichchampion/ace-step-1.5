@@ -157,7 +157,7 @@ def main():
                 b, c, t = 1, 64, 100
                 example_input = (torch.randn((b, c, t), dtype=torch.float32),)
                 
-                inputs_schema = [ct.TensorType(name="latents", shape=(1, 64, ct.RangeDim(1, 4096)), dtype=np.float32)]
+                inputs_schema = [ct.TensorType(name="latents", shape=(1, 64, ct.RangeDim(256, 15000)), dtype=np.float32)]
                 outputs_schema = [ct.TensorType(name="audio")]
                 
             else:
@@ -463,8 +463,8 @@ def main():
                 example_input = (hidden_states, attention_mask)
                 
                 inputs_schema = [
-                    ct.TensorType(name="hidden_states", shape=(1, ct.RangeDim(1, 4096), d), dtype=np.float32),
-                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(1, 4096)), dtype=np.float32)
+                    ct.TensorType(name="hidden_states", shape=(1, ct.RangeDim(32, 4096), d), dtype=np.float32),
+                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(32, 4096)), dtype=np.float32)
                 ]
                 outputs_schema = [ct.TensorType(name="velocity")]
 
@@ -493,8 +493,8 @@ def main():
                     example_input = (torch.zeros((1, 10), dtype=torch.int32), torch.ones((1, 10), dtype=torch.int32))
 
                 inputs_schema = [
-                    ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(1, 4096)), dtype=np.int32),
-                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(1, 4096)), dtype=np.int32)
+                    ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(16, 4096)), dtype=np.int32),
+                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(16, 4096)), dtype=np.int32)
                 ]
                 outputs_schema = [ct.TensorType(name="logits")]
 
@@ -510,6 +510,16 @@ def main():
                 convert_to="mlprogram",
                 minimum_deployment_target=ct.target.macOS13,
             )
+            
+            print("  Freeing PyTorch models from memory before Core ML compression...")
+            if 'model' in locals(): del model
+            if 'wrapped_model' in locals(): del wrapped_model
+            if 'traced_model' in locals(): del traced_model
+            gc.collect()
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             # Now apply palettization for each bit depth
             for bits in bits_to_process:
@@ -531,6 +541,10 @@ def main():
                     print(f"  [{bits}-bit] Successfully created '{output_path}'.")
                 except Exception as e:
                     print(f"  [{bits}-bit] Error during compression or saving: {e}")
+                finally:
+                    if 'compressed_mlmodel' in locals():
+                        del compressed_mlmodel
+                    gc.collect()
 
         except Exception as e:
             print(f"  [Error] Failed to process model '{item.name}': {e}")
