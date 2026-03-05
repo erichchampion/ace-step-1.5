@@ -8,9 +8,14 @@ Parallel directories will be created for each quantized model.
 import os
 import sys
 import gc
+import argparse
 from pathlib import Path
 
 def main():
+    parser = argparse.ArgumentParser(description="Quantize models to Core ML format.")
+    parser.add_argument("model_name", type=str, nargs="?", help="Optional: Name of a specific model to quantize.")
+    args = parser.parse_args()
+
     # Flush Hugging Face's transformers modules cache for acestep to ensure local patches apply
     try:
         import shutil
@@ -106,6 +111,10 @@ def main():
     for item in checkpoints_dir.iterdir():
         if not item.is_dir():
             continue
+
+        # If a specific model was requested, skip others
+        if args.model_name and item.name != args.model_name:
+            continue
             
         # Skip directories that already represent quantized models or coreml outputs
         if "bit" in item.name or "coreml" in item.name:
@@ -157,7 +166,7 @@ def main():
                 b, c, t = 1, 64, 100
                 example_input = (torch.randn((b, c, t), dtype=torch.float32),)
                 
-                inputs_schema = [ct.TensorType(name="latents", shape=(1, 64, ct.RangeDim(256, 15000)), dtype=np.float32)]
+                inputs_schema = [ct.TensorType(name="latents", shape=(1, 64, ct.RangeDim(256, 15000, default=256)), dtype=np.float32)]
                 outputs_schema = [ct.TensorType(name="audio")]
                 
             else:
@@ -463,8 +472,8 @@ def main():
                 example_input = (hidden_states, attention_mask)
                 
                 inputs_schema = [
-                    ct.TensorType(name="hidden_states", shape=(1, ct.RangeDim(32, 4096), d), dtype=np.float32),
-                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(32, 4096)), dtype=np.float32)
+                    ct.TensorType(name="hidden_states", shape=(1, ct.RangeDim(32, 4096, default=128), d), dtype=np.float32),
+                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(32, 4096, default=128)), dtype=np.float32)
                 ]
                 outputs_schema = [ct.TensorType(name="velocity")]
 
@@ -486,15 +495,15 @@ def main():
                 try:
                     tokenizer = AutoTokenizer.from_pretrained(str(item), trust_remote_code=True)
                     inputs = tokenizer("Hello, world!", return_tensors="pt")
-                    # Force strict int32 to match MIL schema and prevent unordered_map type miss-matches
-                    example_input = (inputs["input_ids"].to(torch.int32), inputs["attention_mask"].to(torch.int32))
+                    # Force float32 to match MIL schema and prevent unordered_map type miss-matches and int32 extraction bugs
+                    example_input = (inputs["input_ids"].to(torch.float32), inputs["attention_mask"].to(torch.float32))
                 except Exception as e:
                     print(f"  [Warning] Could not load tokenizer for sample input, using generic tensor: {e}")
-                    example_input = (torch.zeros((1, 10), dtype=torch.int32), torch.ones((1, 10), dtype=torch.int32))
+                    example_input = (torch.zeros((1, 10), dtype=torch.float32), torch.ones((1, 10), dtype=torch.float32))
 
                 inputs_schema = [
-                    ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(16, 4096)), dtype=np.int32),
-                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(16, 4096)), dtype=np.int32)
+                    ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(16, 4096, default=128)), dtype=np.float32),
+                    ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(16, 4096, default=128)), dtype=np.float32)
                 ]
                 outputs_schema = [ct.TensorType(name="logits")]
 
@@ -508,7 +517,7 @@ def main():
                 inputs=inputs_schema,
                 outputs=outputs_schema,
                 convert_to="mlprogram",
-                minimum_deployment_target=ct.target.macOS13,
+                minimum_deployment_target=ct.target.macOS14,
             )
             
             print("  Freeing PyTorch models from memory before Core ML compression...")
