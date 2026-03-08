@@ -260,3 +260,4 @@ AceStepSwift/.swiftpm/
 generation_smoke_output/
 quantized_checkpoints_coreml/
 !quantized_checkpoints_coreml/hf-upload.sh
+debug*.txt
