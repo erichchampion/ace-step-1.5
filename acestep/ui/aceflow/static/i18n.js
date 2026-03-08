@@ -213,7 +213,7 @@
       'footer.service_offer': 'AceFlow by Marco Robustini - Your IP is:',
       'footer.songs_generated': 'Songs generated:',
       'footer.gpu_line': 'GPU: {name} — VRAM: {used}/{total} GB — Temp: {temp}°C',
-      'help.model_shift_note': "Note: if the selected model contains 'shift1' or 'shift3', set the Shift parameter to the same value.",
+      'help.model_shift_note': "The interface automatically adjusts the 'Shift' values according to the selected DiT model.",
 
       
       'status.ready': 'Ready. Model: {model}. Max duration: {max}s.',
@@ -525,7 +525,7 @@
       'footer.service_offer': 'AceFlow by Marco Robustini - Il tuo IP è:',
       'footer.songs_generated': 'Canzoni generate:',
       'footer.gpu_line': 'GPU: {name} — VRAM: {used}/{total} GB — Temp: {temp}°C',
-      'help.model_shift_note': "L'interfaccia adegua atuomaticamente i valori di'Shift' in base al DiT selezionato.",
+      'help.model_shift_note': "L'interfaccia adegua automaticamente i valori di 'Shift' in base al DiT selezionato.",
 
       
       'status.ready': 'Pronto. Modello: {model}. Durata max: {max}s.',

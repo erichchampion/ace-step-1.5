@@ -1,3 +1,10 @@
+"""Utilities for parsing chord symbols and rendering lightweight harmonic reference WAV files.
+
+This module keeps the AceFlow chord-reference workflow self-contained: it parses
+common chord symbols, chooses compact voicings with simple continuity heuristics,
+and synthesizes a mono WAV preview used for harmonic conditioning.
+"""
+
 from __future__ import annotations
 
 import io
@@ -78,6 +85,18 @@ MAX_RENDER_DURATION_SEC = 600.0
 
 @dataclass
 class ParsedChord:
+    """Normalized representation of a chord symbol used by the preview renderer.
+
+    Attributes:
+        original: Original chord token received from the UI or section map.
+        normalized: Sanitized symbol used for parsing and debug metadata.
+        root_pc: Root pitch class in semitones where C=0.
+        chord_pcs: Distinct pitch classes included in the resolved chord.
+        bass_pc: Pitch class used for the bass note after slash-chord parsing.
+        descriptor: Canonical internal descriptor such as ``maj7`` or ``min9``.
+        warning: Optional fallback marker when the descriptor needed heuristics.
+    """
+
     original: str
     normalized: str
     root_pc: int
@@ -88,6 +107,14 @@ class ParsedChord:
 
 
 def midi_to_freq(midi: float) -> float:
+    """Convert a MIDI note number to frequency in hertz.
+
+    Args:
+        midi: MIDI note value, including fractional notes if needed.
+
+    Returns:
+        float: Frequency in hertz referenced to A4 = 440 Hz.
+    """
     return 440.0 * (2.0 ** ((float(midi) - 69.0) / 12.0))
 
 
@@ -98,6 +125,19 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 def parse_chord_symbol(symbol: str) -> Optional[ParsedChord]:
+    """Parse a chord symbol into a normalized structure for voicing and rendering.
+
+    Args:
+        symbol: Raw chord symbol such as ``Cmaj7``, ``Am7``, or ``F/G``.
+
+    Returns:
+        Optional[ParsedChord]: Parsed chord data, or ``None`` when the input
+        cannot be interpreted by the AceFlow chord parser.
+
+    Notes:
+        Uppercase major aliases like ``CM7`` and ``FM9`` are handled before the
+        lowercase fallback heuristics to avoid accidental minor resolution.
+    """
     normalized = _normalize_symbol(symbol)
     if not normalized:
         return None
@@ -237,6 +277,16 @@ def _compact_voicing(root_midi: int, intervals: list[int]) -> list[int]:
 
 
 def choose_voicing(chord: ParsedChord, previous_pad: Optional[list[int]], previous_bass: Optional[int]) -> tuple[int, list[int]]:
+    """Choose a bass note and compact pad voicing for a parsed chord.
+
+    Args:
+        chord: Parsed chord returned by :func:`parse_chord_symbol`.
+        previous_pad: Previously rendered pad voicing used for continuity.
+        previous_bass: Previously rendered bass MIDI note used to reduce leaps.
+
+    Returns:
+        tuple[int, list[int]]: Bass MIDI note and ordered pad MIDI notes.
+    """
     bass_midi = _best_bass_midi(chord.bass_pc, previous_bass)
     root_pc = chord.root_pc
     intervals = sorted({(pc - root_pc) % 12 for pc in chord.chord_pcs})
@@ -303,6 +353,20 @@ def _add_signal(buffer: np.ndarray, signal: np.ndarray, start: int) -> None:
 
 
 def synthesize_reference_wav_bytes(chords: list[str], bpm: float = 120.0, beats_per_chord: int = 4, target_duration_sec: Optional[float] = None) -> tuple[bytes, dict]:
+    """Render a mono chord-reference WAV in memory and return debug metadata.
+
+    Args:
+        chords: Sequence of chord symbols to render. Empty inputs fall back to a
+            default progression for preview generation.
+        bpm: Target tempo in beats per minute. Values are clamped to a safe range.
+        beats_per_chord: Number of beats assigned to each chord event.
+        target_duration_sec: Optional target duration. Rendering is capped by
+            ``MAX_RENDER_DURATION_SEC`` to avoid excessive allocations.
+
+    Returns:
+        tuple[bytes, dict]: PCM WAV bytes and metadata describing warnings,
+        rendered events, effective duration, and loop count.
+    """
     sample_rate = 44100
     safe_bpm = max(48.0, min(220.0, float(bpm or 120.0)))
     beat_sec = 60.0 / safe_bpm
@@ -325,6 +389,19 @@ def synthesize_reference_wav_bytes(chords: list[str], bpm: float = 120.0, beats_
     base_duration = len(parsed_sequence) * chord_sec
     requested_duration = max(base_duration, float(target_duration_sec or 0.0))
     capped_duration = min(requested_duration, MAX_RENDER_DURATION_SEC)
+    if requested_duration > capped_duration:
+        warnings.append({
+            'symbol': '',
+            'reason': 'duration_truncated',
+            'fallback': str(MAX_RENDER_DURATION_SEC),
+        })
+        warning_debug.append({
+            'symbol': '',
+            'reason': 'duration_truncated',
+            'fallback': str(MAX_RENDER_DURATION_SEC),
+            'requested_duration_sec': round(requested_duration, 4),
+            'capped_duration_sec': round(capped_duration, 4),
+        })
     loop_count = max(1, math.ceil(capped_duration / max(base_duration, 0.001)))
     expanded = parsed_sequence * loop_count
     total_duration = max(base_duration, capped_duration)
@@ -402,6 +479,23 @@ def synthesize_reference_wav_bytes(chords: list[str], bpm: float = 120.0, beats_
 
 
 def render_reference_wav_file(chords: list[str], output_path: str | Path, bpm: float = 120.0, beats_per_chord: int = 4, target_duration_sec: Optional[float] = None) -> dict:
+    """Render a chord-reference WAV to disk and return the render metadata.
+
+    Args:
+        chords: Sequence of chord symbols to synthesize.
+        output_path: Destination file path for the rendered WAV file.
+        bpm: Target tempo in beats per minute.
+        beats_per_chord: Number of beats assigned to each chord event.
+        target_duration_sec: Optional target render duration, still subject to
+            the module safety cap.
+
+    Returns:
+        dict: Metadata returned by :func:`synthesize_reference_wav_bytes` plus
+        ``output_path`` and ``size_bytes`` for the written file.
+
+    Raises:
+        OSError: If the destination directory or file cannot be created.
+    """
     wav_bytes, meta = synthesize_reference_wav_bytes(chords=chords, bpm=bpm, beats_per_chord=beats_per_chord, target_duration_sec=target_duration_sec)
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
