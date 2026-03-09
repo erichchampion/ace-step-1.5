@@ -30,7 +30,7 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
         
         // Load MLModel
         let config = MLModelConfiguration()
-        config.computeUnits = .all
+        config.computeUnits = .cpuAndGPU // Bypass ANE due to ios17.mul broadcasting crash with dynamic shapes
         let compiledURL = try await CoreMLHelper.compileIfNeeded(modelURL: directory)
         let model = try MLModel(contentsOf: compiledURL, configuration: config)
         
