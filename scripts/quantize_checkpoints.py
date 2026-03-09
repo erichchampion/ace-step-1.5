@@ -107,83 +107,29 @@ def main():
     except Exception as e:
         log(f"Warning: could not patch create_causal_mask: {e}")
 
-    # Globally patch Qwen3 eager_attention_forward to avoid dynamic shape slicing that breaks CoreML tracing
+    # Globally patch repeat_kv to avoid dynamic shape slicing that breaks CoreML tracing
     try:
-        import os
-        import transformers.models.qwen3.modeling_qwen3 as qwen3_modeling
-        
         def patched_repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-            import os
-            bsz = 1
-            slen = int(os.environ.get("STATIC_SEQ_LEN", "500"))
-            num_key_value_heads = hidden_states.shape[1] # Integer index is safe for heads usually or we can compute it
-            # actually shape[1] might trace dynamically. Let's get it from the tensor directly via shape but we override batch and seq:
-            return hidden_states.repeat_interleave(n_rep, dim=1) # simpler repeat_kv that works in CoreML!
+            if n_rep == 1:
+                return hidden_states
+            # Expand only the new n_rep dimension (index 2) and flatten to evade aten::Int
+            hidden_states = hidden_states[:, :, None, :, :].expand(-1, -1, n_rep, -1, -1)
+            return hidden_states.flatten(1, 2)
             
+        import transformers.integrations.sdpa_attention as sdpa_integration
+        sdpa_integration.repeat_kv = patched_repeat_kv
+        
+        import transformers.models.qwen3.modeling_qwen3 as qwen3_modeling
+        qwen3_modeling.repeat_kv = patched_repeat_kv
+        
         def patched_rotate_half(x):
-            # Bypass `x.shape[-1] // 2` executing as a dynamic tensor int trace!
-            # The dimension of the head is static and can just use the int wrapper around dimension size on the actual underlying tensor!
-            # Because Core ML converts traced slices poorly if they involve sizes!
-            # Instead of slicing, let's use chunk! chunk doesn't rely on integer slice boundaries built from tensors
-            x1, x2 = x.chunk(2, dim=-1)
-            return torch.cat((-x2, x1), dim=-1)
-            
+            half = torch.chunk(x, 2, dim=-1)
+            return torch.cat((-half[1], half[0]), dim=-1)
         qwen3_modeling.rotate_half = patched_rotate_half
         
-        def patched_eager_attention_forward(module, query, key, value, attention_mask, scaling, dropout=0.0, **kwargs):
-            import torch
-            key_states = patched_repeat_kv(key, module.num_key_value_groups)
-            value_states = patched_repeat_kv(value, module.num_key_value_groups)
-
-            attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
-            if attention_mask is not None:
-                attn_weights = attn_weights + attention_mask
-
-            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-            attn_weights = torch.nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-            attn_output = torch.matmul(attn_weights, value_states)
-            attn_output = attn_output.transpose(1, 2).contiguous()
-
-            return attn_output, attn_weights
-
-        qwen3_modeling.eager_attention_forward = patched_eager_attention_forward
-        
-        # Patch Qwen3Attention forward method!
-        def patched_qwen3_attn_forward(self, hidden_states, position_embeddings, attention_mask, past_key_values=None, cache_position=None, **kwargs):
-            import os
-            bsz = 1
-            slen = int(os.environ.get("STATIC_SEQ_LEN", "500"))
-            
-            # Using hardcoded integers avoids PyTorch generating `prim::Int(aten::size(...))` which CoreML chokes on!
-            hidden_shape = (bsz, slen, -1, self.head_dim)
-
-            import torch
-            query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
-            key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
-            value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-
-            cos, sin = position_embeddings
-            query_states, key_states = qwen3_modeling.apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-            attn_output, attn_weights = patched_eager_attention_forward(
-                self,
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                scaling=self.scaling,
-                dropout=0.0,
-                **kwargs,
-            )
-
-            attn_output = attn_output.reshape(bsz, slen, -1).contiguous()
-            attn_output = self.o_proj(attn_output)
-            return attn_output, attn_weights
-
-        qwen3_modeling.Qwen3Attention.forward = patched_qwen3_attn_forward
-        log("  [Global Patch] Applied eager_attention_forward patch to bypass JIT int() cast bugs using STATIC_SEQ_LEN.")
+        log("  [Global Patch] Applied repeat_kv flatten(1, 2) patch for fully dynamic sequences!")
     except Exception as e:
-        log(f"  [Global Patch Warning] Failed to patch eager attention: {e}")
+        log(f"  [Global Patch Warning] Failed to patch repeat_kv: {e}")
 
     # Iterate over all directories in checkpoints/
     for item in sorted(checkpoints_dir.iterdir()):
@@ -253,10 +199,11 @@ def main():
                 # Align shapes to 128 to match the 5.0 second Swift test length
                 # Trace with a small example input for fast PyTorch graph construction
                 import os
-                os.environ["STATIC_SEQ_LEN"] = "128"
+                if "STATIC_SEQ_LEN" in os.environ:
+                    del os.environ["STATIC_SEQ_LEN"]
                 b, c, t = 1, 64, 128
                 example_input = (torch.randn((b, c, t), dtype=torch.float32),)
-                inputs_schema = [ct.TensorType(name="latents", shape=(1, 64, 128), dtype=np.float32)]
+                inputs_schema = [ct.TensorType(name="latents", shape=(1, 64, ct.RangeDim(16, 32768, default=128)), dtype=np.float32)]
                 outputs_schema = [ct.TensorType(name="audio")]
                 
             else:
@@ -338,7 +285,8 @@ def main():
                     # model.decoder.layers = model.decoder.layers[:1] # REMOVED layer limit
                     wrapped_model = AcestepWrapper(model).eval()
                     import os
-                    os.environ["STATIC_SEQ_LEN"] = "128"
+                    if "STATIC_SEQ_LEN" in os.environ:
+                        del os.environ["STATIC_SEQ_LEN"]
                     example_input = (
                         torch.randn((1, 128, 64), dtype=torch.float32), torch.randn((1,), dtype=torch.float32),
                         torch.randn((1,), dtype=torch.float32), torch.ones((1, 128), dtype=torch.float32),
@@ -346,13 +294,13 @@ def main():
                         torch.randn((1, 128, 128), dtype=torch.float32)
                     )
                     inputs_schema = [
-                        ct.TensorType(name="hidden_states", shape=(1, 128, 64), dtype=np.float32),
+                        ct.TensorType(name="hidden_states", shape=(1, ct.RangeDim(16, 32768, default=128), 64), dtype=np.float32),
                         ct.TensorType(name="timestep", shape=(1,), dtype=np.float32),
                         ct.TensorType(name="timestep_r", shape=(1,), dtype=np.float32),
-                        ct.TensorType(name="attention_mask", shape=(1, 128), dtype=np.float32),
+                        ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(16, 32768, default=128)), dtype=np.float32),
                         ct.TensorType(name="encoder_hidden_states", shape=(1, ct.RangeDim(1, 512, default=100), 2048), dtype=np.float32),
                         ct.TensorType(name="encoder_attention_mask", shape=(1, ct.RangeDim(1, 512, default=100)), dtype=np.float32),
-                        ct.TensorType(name="context_latents", shape=(1, 128, 128), dtype=np.float32)
+                        ct.TensorType(name="context_latents", shape=(1, ct.RangeDim(16, 32768, default=128), 128), dtype=np.float32)
                     ]
                     outputs_schema = [ct.TensorType(name="velocity")]
                 else:
@@ -387,6 +335,11 @@ def main():
             )
             log("  [Done] Core ML conversion successful.")
             
+            # Extract null condition embedding for DiT models before deleting
+            null_emb = None
+            if 'model' in locals() and hasattr(model, 'null_condition_emb'):
+                null_emb = model.null_condition_emb.detach().cpu()
+            
             # Free memory
             if 'model' in locals(): del model
             if 'wrapped_model' in locals(): del wrapped_model
@@ -408,6 +361,11 @@ def main():
                     log(f"  [{bits}-bit] Saving to '{output_path}'...")
                     compressed_mlmodel.save(str(output_path))
                     log(f"  [{bits}-bit] Successfully created '{output_path}'.")
+                    if null_emb is not None:
+                        import safetensors.torch
+                        null_path = output_path / "null_condition_embedding.safetensors"
+                        safetensors.torch.save_file({"null_condition_emb": null_emb}, null_path)
+                        log(f"  [{bits}-bit] Saved null_condition_embedding.safetensors to '{output_path}'.")
                 except Exception as e:
                     log(f"  [{bits}-bit] Error during compression: {e}")
                 finally:
