@@ -235,7 +235,27 @@ See [scripts/README.md](../../scripts/README.md) and [GenerationSmokeTests](../T
 
 ---
 
-## 6. Review Findings and Possible Bugs
+## 6. CoreML Quantization and Generation
+
+### 6.1 Conversion Pipeline
+The Python codebase provides a conversion script (`scripts/quantize_checkpoints.py`) to trace and convert both the DiT (`acestep-v15-turbo`) and VAE models to CoreML `.mlpackage` containers.
+CoreML requires fully static shapes during tracing, so the script enforces a `STATIC_SEQ_LEN` corresponding to exactly 5.0 seconds of generation data (e.g., length=128). The generated files can be packaged as 4-bit, 6-bit, and 8-bit palettized weights using `coremltools` compression. 
+
+**Artifacts Generated (`/quantized_checkpoints_coreml`):**
+- `acestep-v15-turbo-coreml-[4,6,8]bit.mlpackage`: CoreML wrapper for the main DiT network.
+- `vae-coreml-[4,6,8]bit.mlpackage`: CoreML wrapper for the `AutoencoderOobleck` VAE decoding phase. 
+
+### 6.2 Using CoreML in Swift
+Once exported, you can execute the pipeline entirely on the Apple Neural Engine (`ANE`), or GPU using the CoreML abstraction rather than standalone `MLX`. 
+
+To use CoreML in the pipeline:
+1. Initialize the `CoreMLVAEDecoder` and `CoreMLDiTStepper` using the URLs for the generated `.mlpackage` bundles.
+2. Under the hood, the CoreML stepper will automatically convert `MLXArray` conditionings (e.g. `context_latents`, `encoder_hidden_states`) into floating-point buffers and inject them via an `MLDictionaryFeatureProvider`.
+3. Call `predict()` on the core model and manually extract the resulting output tensors as an updated `MLXArray` before continuing the SDE/ODE timestep generation loop.
+
+---
+
+## 7. Review Findings and Possible Bugs
 
 Findings from reviewing the Swift code for parity with Python and for library robustness.
 
