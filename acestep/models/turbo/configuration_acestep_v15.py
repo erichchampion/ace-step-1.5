@@ -152,7 +152,7 @@ class AceStepConfig(PretrainedConfig):
         fsq_input_levels=[8, 8, 8, 5, 5, 5],
         fsq_input_num_quantizers=1,
         hidden_size=2048,
-        intermediate_size=6144,
+        inner_mlp_width=6144,
         num_hidden_layers=24,
         num_attention_heads=16,
         num_key_value_heads=8,
@@ -174,7 +174,7 @@ class AceStepConfig(PretrainedConfig):
         audio_acoustic_hidden_dim=64,
         pool_window_size=5,
         text_hidden_dim=1024,
-        in_channels=192,
+        in_channels=256,
         data_proportion=0.5,
         timestep_mu=-0.4,
         timestep_sigma=1.0,
@@ -189,7 +189,7 @@ class AceStepConfig(PretrainedConfig):
     ):
         self.max_position_embeddings = max_position_embeddings
         self.hidden_size = hidden_size
-        self.intermediate_size = intermediate_size
+        self.inner_mlp_width = inner_mlp_width
         self.num_hidden_layers = num_hidden_layers
         self.num_attention_heads = num_attention_heads
         self.use_sliding_window = use_sliding_window

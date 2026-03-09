@@ -36,5 +36,6 @@ public struct DiTConditions {
 /// Protocol for a single diffusion step: current latent + timestep + conditions → next latent (same shape).
 /// nextTimestep: when non-nil, ODE step uses dt = timestep - nextTimestep; when nil (e.g. last step), uses xt - vt * timestep.
 public protocol DiffusionStepper: AnyObject {
+    func predictVelocity(currentLatent: MLXArray, timestep: Float, conditions: DiTConditions, useCache: Bool) -> MLXArray
     func step(currentLatent: MLXArray, timestep: Float, conditions: DiTConditions, nextTimestep: Float?) -> MLXArray
 }

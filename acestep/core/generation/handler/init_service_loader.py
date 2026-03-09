@@ -93,8 +93,11 @@ class InitServiceLoaderMixin:
                     from torchao.quantization import Int8WeightOnlyConfig
                     quant_config = Int8WeightOnlyConfig()
                 elif quantization == "fp8_weight_only":
-                    from torchao.quantization import Float8WeightOnlyConfig
-                    quant_config = Float8WeightOnlyConfig()
+                    if hasattr(torchao.quantization, "Float8WeightOnlyConfig"):
+                        from torchao.quantization import Float8WeightOnlyConfig
+                        quant_config = Float8WeightOnlyConfig()
+                    else:
+                        raise ImportError("fp8_weight_only requires a newer version of torchao (>= 0.8.0)")
                 elif quantization == "w8a8_dynamic":
                     from torchao.quantization import Int8DynamicActivationInt8WeightConfig, MappingType
                     quant_config = Int8DynamicActivationInt8WeightConfig(act_mapping_type=MappingType.ASYMMETRIC)

@@ -168,6 +168,12 @@ def main() -> int:
     _write_bin(out_dir / "encoder_hidden_states.bin", enc)
     _write_bin(out_dir / "context_latents.bin", ctx)
 
+    # Export null_condition_embedding for guidance (CFG/APG)
+    null_cond = getattr(handler.model, "null_condition_emb", None)
+    if null_cond is not None:
+        _write_bin(out_dir / "null_condition_embedding.bin", null_cond)
+        print(f"  null_condition_embedding.bin shape {tuple(null_cond.shape)}", file=sys.stderr)
+
     # Export initial noise (same seed 42, shape [1, T, 64]) so Swift can use identical noise.
     t_len = int(ctx.shape[1])
     try:

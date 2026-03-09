@@ -251,8 +251,8 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         params: GenerationParams,
         momentumState: inout [String: MLXArray]?
     ) -> MLXArray {
+        // Guidance criteria: scale > 1.0 and all required conditions for unconditioned branch exist.
         guard
-            let mlxStepper = stepper as? MLXDiTStepper,
             params.guidanceScale > 1.0,
             let nullCond = conditions.nullConditionEmbedding,
             let enc = conditions.encoderHiddenStates,
@@ -270,28 +270,55 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         let t = currentLatent.dim(1)
         let c = currentLatent.dim(2)
 
-        let xIn = concatenated([currentLatent, currentLatent], axis: 0)
-        let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
-        let encDoubled = concatenated([enc, nullExpanded], axis: 0)
-        let ctxDoubled = concatenated([ctx, ctx], axis: 0)
-        let maskDoubled: MLXArray? = conditions.encoderAttentionMask.map { concatenated([$0, $0], axis: 0) }
-        let cfgConditions = DiTConditions(
-            encoderHiddenStates: encDoubled,
-            contextLatents: ctxDoubled,
-            encoderAttentionMask: maskDoubled,
-            nullConditionEmbedding: nil,
-            initialLatents: nil
-        )
+        let predCond: MLXArray
+        let predUncond: MLXArray
 
-        let vtDoubled = mlxStepper.predictVelocity(
-            currentLatent: xIn,
-            timestep: timestep,
-            conditions: cfgConditions,
-            useCache: false
-        )
+        if let mlxStepper = stepper as? MLXDiTStepper {
+            // MLX Optimized Path: run shared forward pass with doubled batch [2*B, ...]
+            let xIn = concatenated([currentLatent, currentLatent], axis: 0)
+            let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
+            let encDoubled = concatenated([enc, nullExpanded], axis: 0)
+            let ctxDoubled = concatenated([ctx, ctx], axis: 0)
+            let maskDoubled: MLXArray? = conditions.encoderAttentionMask.map { concatenated([$0, $0], axis: 0) }
+            let cfgConditions = DiTConditions(
+                encoderHiddenStates: encDoubled,
+                contextLatents: ctxDoubled,
+                encoderAttentionMask: maskDoubled,
+                nullConditionEmbedding: nil,
+                initialLatents: nil
+            )
 
-        let predCond = vtDoubled[0..<b, 0..<t, 0..<c]
-        let predUncond = vtDoubled[b..<(b * 2), 0..<t, 0..<c]
+            let vtDoubled = mlxStepper.predictVelocity(
+                currentLatent: xIn,
+                timestep: timestep,
+                conditions: cfgConditions,
+                useCache: false // Cross-attention cache currently expects stable batch dimension
+            )
+            predCond = vtDoubled[0..<b, 0..<t, 0..<c]
+            predUncond = vtDoubled[b..<(b * 2), 0..<t, 0..<c]
+        } else {
+            // General Path (e.g. CoreML): run two sequential forward passes
+            // 1. Conditional branch
+            predCond = stepper.predictVelocity(
+                currentLatent: currentLatent,
+                timestep: timestep,
+                conditions: conditions,
+                useCache: true
+            )
+
+            // 2. Unconditional branch (using nullConditionEmbedding instead of normal encoder hidden states)
+            let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
+            var uncondConditions = conditions
+            uncondConditions.encoderHiddenStates = nullExpanded
+            
+            predUncond = stepper.predictVelocity(
+                currentLatent: currentLatent,
+                timestep: timestep,
+                conditions: uncondConditions,
+                useCache: true
+            )
+        }
+
         let applyCFG = params.cfgIntervalStart <= Double(timestep) && Double(timestep) <= params.cfgIntervalEnd
         let vt: MLXArray
         if applyCFG {

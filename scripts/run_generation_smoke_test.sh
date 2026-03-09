@@ -55,7 +55,7 @@ if [ -d "$CHECKPOINTS_DIR/$ACESTEP_CONFIG_PATH" ]; then
   echo ""
   echo "=== Python Generation (config: $ACESTEP_CONFIG_PATH) ==="
   export ACESTEP_CONFIG_PATH
-  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$OUTPUT_DIR" --duration "$SMOKE_DURATION" --seed "$SMOKE_SEED"); then
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/generate_audio.py --output-dir "$OUTPUT_DIR" --duration "$SMOKE_DURATION" --seed "$SMOKE_SEED"; then
     echo "Python generator: ok"
   else
     echo "Python generator: failed (continuing)"
@@ -74,7 +74,7 @@ if [ -f "$DIT_WEIGHTS_DIR/model.safetensors" ]; then
   
   # Preprocess .pt files to .safetensors for Swift compatibility
   echo "Preprocessing models for Swift..."
-  if (cd "$REPO_ROOT" && python scripts/preprocess_models_for_swift.py --checkpoints-dir "$CHECKPOINTS_DIR" --model "$(basename "$DIT_WEIGHTS_DIR")" --verbose); then
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/preprocess_models_for_swift.py --checkpoints-dir "$CHECKPOINTS_DIR" --model "$(basename "$DIT_WEIGHTS_DIR")" --verbose; then
     echo "Model preprocessing: ok"
   else
     echo "Model preprocessing: failed (some .pt files may not be converted)"
@@ -87,7 +87,7 @@ fi
 CONDITIONING_DIR="$OUTPUT_DIR/conditioning"
 if [ -d "$CHECKPOINTS_DIR/$ACESTEP_CONFIG_PATH" ]; then
   echo "Exporting conditioning for Swift..."
-  if (cd "$REPO_ROOT" && python scripts/export_conditioning_for_swift.py --output-dir "$CONDITIONING_DIR" 2>&1); then
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/export_conditioning_for_swift.py --output-dir "$CONDITIONING_DIR" 2>&1; then
     echo "Conditioning exported to $CONDITIONING_DIR"
   else
     echo "Conditioning export failed (Swift may use zeros and produce garbled audio)"
@@ -98,16 +98,20 @@ if [ -f "$CONDITIONING_DIR/encoder_hidden_states.bin" ] && [ -f "$CONDITIONING_D
   export TEST_RUNNER_CONDITIONING_DIR="$CONDITIONING_DIR"
   echo "Using precomputed conditioning: $CONDITIONING_DIR"
 fi
-# Use real VAE from checkpoints when decoder.safetensors exists (create with: python scripts/export_vae_decoder_mlx.py).
+# Use real VAE from checkpoints when decoder.safetensors exists; auto-export if missing.
 VAE_WEIGHTS="$CHECKPOINTS_DIR/vae/decoder.safetensors"
+if [ ! -f "$VAE_WEIGHTS" ] && [ -d "$CHECKPOINTS_DIR/vae" ]; then
+  echo "Exporting VAE decoder weights for Swift..."
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/export_vae_decoder_mlx.py 2>&1; then
+    echo "VAE decoder export: ok"
+  else
+    echo "VAE decoder export: failed (Swift will produce silent audio)"
+  fi
+fi
 if [ -f "$VAE_WEIGHTS" ]; then
   export VAE_WEIGHTS_PATH="$VAE_WEIGHTS"
   export TEST_RUNNER_VAE_WEIGHTS_PATH="$VAE_WEIGHTS"
   echo "Using real VAE: $VAE_WEIGHTS_PATH"
-else
-  if [ -d "$CHECKPOINTS_DIR/vae" ]; then
-    echo "Tip: run 'python scripts/export_vae_decoder_mlx.py' to create $VAE_WEIGHTS for real decoded audio"
-  fi
 fi
 
 # Export generation params so Swift tests can use the same values
@@ -143,6 +147,26 @@ else
   echo "Swift generator: failed (continuing)"
 fi
 
+# ---- Core ML Validation ----
+COREML_DIR="$REPO_ROOT/quantized_checkpoints_coreml"
+if [ -d "$COREML_DIR" ]; then
+  echo ""
+  echo "=== Core ML Generation ==="
+  
+  for BIT in 4 6 8; do
+    if ls "$COREML_DIR"/*${BIT}bit* 1> /dev/null 2>&1 || [ -n "$(find "$COREML_DIR" -name "*${BIT}bit*")" ]; then
+      export COREML_${BIT}BIT_PATH="$COREML_DIR"
+      export TEST_RUNNER_COREML_${BIT}BIT_PATH="$COREML_DIR"
+      echo "Running ${BIT}-bit Core ML test..."
+      if (cd "$REPO_ROOT/AceStepSwift" && xcodebuild test -scheme AceStepSwift -destination 'platform=macOS' -only-testing:AceStepSwiftTests/CoreMLGenerationTests/test${BIT}BitGeneration 2>&1); then
+        echo "${BIT}-bit Core ML test: ok"
+      else
+        echo "${BIT}-bit Core ML test: failed (continuing)"
+      fi
+    fi
+  done
+fi
+
 # ---- Validation ----
 echo ""
 echo "=== Validation ==="
@@ -150,6 +174,9 @@ echo "=== Validation ==="
 TO_VALIDATE=()
 [ -f "$OUTPUT_DIR/python_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/python_out.wav")
 [ -f "$OUTPUT_DIR/swift_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_out.wav")
+[ -f "$OUTPUT_DIR/swift_4bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_4bit_out.wav")
+[ -f "$OUTPUT_DIR/swift_6bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_6bit_out.wav")
+[ -f "$OUTPUT_DIR/swift_8bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_8bit_out.wav")
 
 if [ ${#TO_VALIDATE[@]} -eq 0 ]; then
   echo "No output files to validate (python_out.wav, swift_out.wav missing)"
@@ -157,7 +184,7 @@ if [ ${#TO_VALIDATE[@]} -eq 0 ]; then
 fi
 
 echo "Validating waveform(s) with expected duration ~${SMOKE_DURATION}s..."
-python "$REPO_ROOT/scripts/validate_audio.py" \
+"$REPO_ROOT"/.venv/bin/python3 "$REPO_ROOT/scripts/validate_audio.py" \
   --expected-duration "$SMOKE_DURATION" \
   --duration-tolerance 1.0 \
   --compare \
@@ -175,13 +202,13 @@ if [ "$SMOKE_EXTRA_TESTS" -eq 1 ] && [ -d "$CHECKPOINTS_DIR/$ACESTEP_CONFIG_PATH
   
   echo "Testing seed reproducibility (seed=$SMOKE_SEED)..."
   SEED_OK=true
-  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "seed test run 1" 2>&1); then
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "seed test run 1" 2>&1; then
     mv "$EXTRA_OUTPUT/python_out.wav" "$EXTRA_OUTPUT/seed_run1.wav" 2>/dev/null || true
-    if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "seed test run 1" 2>&1); then
+    if "$REPO_ROOT"/.venv/bin/python3 scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "seed test run 1" 2>&1; then
       mv "$EXTRA_OUTPUT/python_out.wav" "$EXTRA_OUTPUT/seed_run2.wav" 2>/dev/null || true
       if [ -f "$EXTRA_OUTPUT/seed_run1.wav" ] && [ -f "$EXTRA_OUTPUT/seed_run2.wav" ]; then
         echo "Comparing seed reproducibility:"
-        python "$REPO_ROOT/scripts/validate_audio.py" --compare "$EXTRA_OUTPUT/seed_run1.wav" "$EXTRA_OUTPUT/seed_run2.wav"
+        "$REPO_ROOT"/.venv/bin/python3 "$REPO_ROOT/scripts/validate_audio.py" --compare "$EXTRA_OUTPUT/seed_run1.wav" "$EXTRA_OUTPUT/seed_run2.wav"
       fi
     fi
   fi
@@ -189,20 +216,20 @@ if [ "$SMOKE_EXTRA_TESTS" -eq 1 ] && [ -d "$CHECKPOINTS_DIR/$ACESTEP_CONFIG_PATH
   # Test short duration (1s)
   echo ""
   echo "Testing short duration (1s)..."
-  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "short clip" 2>&1); then
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 1.0 --seed "$SMOKE_SEED" --caption "short clip" 2>&1; then
     mv "$EXTRA_OUTPUT/python_out.wav" "$EXTRA_OUTPUT/short_1s.wav" 2>/dev/null || true
     if [ -f "$EXTRA_OUTPUT/short_1s.wav" ]; then
-      python "$REPO_ROOT/scripts/validate_audio.py" --expected-duration 1.0 --duration-tolerance 0.5 "$EXTRA_OUTPUT/short_1s.wav"
+      "$REPO_ROOT"/.venv/bin/python3 "$REPO_ROOT/scripts/validate_audio.py" --expected-duration 1.0 --duration-tolerance 0.5 "$EXTRA_OUTPUT/short_1s.wav"
     fi
   fi
   
   # Test longer duration (10s)
   echo ""
   echo "Testing longer duration (10s)..."
-  if (cd "$REPO_ROOT" && python scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 10.0 --seed "$SMOKE_SEED" --caption "long clip" 2>&1); then
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/generate_audio.py --output-dir "$EXTRA_OUTPUT" --duration 10.0 --seed "$SMOKE_SEED" --caption "long clip" 2>&1; then
     mv "$EXTRA_OUTPUT/python_out.wav" "$EXTRA_OUTPUT/long_10s.wav" 2>/dev/null || true
     if [ -f "$EXTRA_OUTPUT/long_10s.wav" ]; then
-      python "$REPO_ROOT/scripts/validate_audio.py" --expected-duration 10.0 --duration-tolerance 1.0 "$EXTRA_OUTPUT/long_10s.wav"
+      "$REPO_ROOT"/.venv/bin/python3 "$REPO_ROOT/scripts/validate_audio.py" --expected-duration 10.0 --duration-tolerance 1.0 "$EXTRA_OUTPUT/long_10s.wav"
     fi
   fi
   
