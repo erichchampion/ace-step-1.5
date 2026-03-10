@@ -304,13 +304,23 @@ def main():
                     ]
                     outputs_schema = [ct.TensorType(name="velocity")]
                 else:
+                    is_text_encoder = "embedding" in item.name.lower() or "qwen" in item.name.lower()
                     class CausalMWrapper(torch.nn.Module):
-                        def __init__(self, m):
+                        def __init__(self, m, is_text_encoder):
                             super().__init__()
                             self.m = m
+                            self.is_text_encoder = is_text_encoder
                         def forward(self, input_ids, attention_mask):
-                            return self.m(input_ids=input_ids, attention_mask=attention_mask, use_cache=False, return_dict=False)[0]
-                    wrapped_model = CausalMWrapper(model).eval()
+                            out = self.m(input_ids=input_ids, attention_mask=attention_mask, use_cache=False, return_dict=False)
+                            if self.is_text_encoder:
+                                # Standard AutoModelForCausalLM structure has inner model at `m.model`
+                                # But if loaded via AutoModel, out[0] might already be hidden states.
+                                # Check if out[0] has vocab size vs hidden dim.
+                                if hasattr(self.m, "model"):
+                                    return self.m.model(input_ids=input_ids, attention_mask=attention_mask)[0]
+                                return out[0]
+                            return out[0]
+                    wrapped_model = CausalMWrapper(model, is_text_encoder).eval()
                     import os
                     os.environ["STATIC_SEQ_LEN"] = "128"
                     example_input = (torch.zeros((1, 128), dtype=torch.int32), torch.ones((1, 128), dtype=torch.int32))
@@ -318,7 +328,7 @@ def main():
                         ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(16, 4096, default=128)), dtype=np.int32),
                         ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(16, 4096, default=128)), dtype=np.int32)
                     ]
-                    outputs_schema = [ct.TensorType(name="logits")]
+                    outputs_schema = [ct.TensorType(name="hidden_states" if is_text_encoder else "logits")]
 
             log("  Tracing PyTorch model...")
             traced_model = trace_with_stack(wrapped_model, example_input, strict=False)

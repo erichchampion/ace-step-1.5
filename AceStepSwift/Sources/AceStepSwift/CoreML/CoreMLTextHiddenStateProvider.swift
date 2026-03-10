@@ -59,21 +59,23 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
             tokenIDs = Array(tokenIDs.prefix(maxLength))
         }
         
-        // Pad to maxLength if necessary to maintain static shape if the model requires it
-        // OR simply pass the variable length if the model supports it.
-        // We look at the quantize_checkpoints.py outputs_schema for Text Encoder wrapper:
-        //      inputs_schema = [
-        //          ct.TensorType(name="input_ids", shape=(1, 10), dtype=np.int32),
-        //          ct.TensorType(name="attention_mask", shape=(1, 10), dtype=np.int32)
-        //      ]
-        // Actually, the example was length 10 but we didn't use RangeDim for LLM/TextEncoder in the example.
-        // Let's assume the CoreML model allows flexible sequence length [1, seq_len] for now.
+        let actualLength = tokenIDs.count
+        
+        // Pad to exactly maxLength to avoid Core ML dynamic shape broadcasting bugs
+        if tokenIDs.count < maxLength {
+            tokenIDs.append(contentsOf: Array(repeating: 0, count: maxLength - tokenIDs.count))
+        }
         
         let seqLen = tokenIDs.count
         
         let tokenIDsInt32 = tokenIDs.map { Int32($0) }
         let shapedInputIDs = MLShapedArray<Int32>(scalars: tokenIDsInt32, shape: [1, seqLen])
-        let shapedAttentionMask = MLShapedArray<Int32>(repeating: 1, shape: [1, seqLen])
+        
+        var maskInt32 = [Int32](repeating: 0, count: seqLen)
+        for i in 0..<actualLength {
+            maskInt32[i] = 1
+        }
+        let shapedAttentionMask = MLShapedArray<Int32>(scalars: maskInt32, shape: [1, seqLen])
         
         let inputProvider = try MLDictionaryFeatureProvider(dictionary: [
             "input_ids": MLMultiArray(shapedInputIDs),
@@ -92,14 +94,25 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
         // What about Qwen as a Text Encoder? It's exported as a generic AutoModel.
         // Let's assume it returns `logits` because the fallback Qwen trace uses CausalMWrapper which returns `outputs[0]` which are logits/hidden_states.
         
-        guard let outputFeature = output.featureValue(for: "logits")?.multiArrayValue ?? output.featureValue(for: "hidden_states")?.multiArrayValue else {
-            throw CoreMLTextHiddenStateProviderError.invalidOutputShape("Missing 'logits' or 'hidden_states' in Core ML output")
+        guard let outputFeature = output.featureValue(for: "hidden_states")?.multiArrayValue ?? output.featureValue(for: "logits")?.multiArrayValue else {
+            let available = output.featureNames.joined(separator: ", ")
+            throw CoreMLTextHiddenStateProviderError.invalidOutputShape("Missing 'hidden_states' or 'logits' in Core ML output. Available features: \(available)")
         }
         
-        let outputShaped = MLShapedArray<Float32>(outputFeature)
-        let hiddenStates = MLXArray(outputShaped.scalars, outputShaped.shape)
+        let hiddenStates: MLXArray
+        if outputFeature.dataType == .float16 {
+            let outputShaped = MLShapedArray<Float16>(outputFeature)
+            hiddenStates = MLXArray(outputShaped.scalars, outputShaped.shape)
+        } else {
+            let outputShaped = MLShapedArray<Float32>(outputFeature)
+            hiddenStates = MLXArray(outputShaped.scalars, outputShaped.shape)
+        }
         
-        let attentionMask = MLXArray.ones([1, seqLen])
+        var maskFloats = [Float](repeating: 0, count: seqLen)
+        for i in 0..<actualLength {
+            maskFloats[i] = 1.0
+        }
+        let attentionMask = MLXArray(maskFloats, [1, seqLen])
         return (hiddenStates, attentionMask)
     }
     

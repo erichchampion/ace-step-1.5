@@ -114,10 +114,10 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             )
         }
         #endif
-        let usingDefaultConditions = (conditions.encoderHiddenStates == nil && conditions.contextLatents == nil)
-        if usingDefaultConditions && stepper is MLXDiTStepper {
+        if conditions.encoderHiddenStates == nil && (stepper is MLXDiTStepper || stepper is CoreMLDiTStepper) {
             throw ContractGenerationPipelineError.missingConditioning
         }
+        let usingDefaultConditions = (conditions.encoderHiddenStates == nil && conditions.contextLatents == nil)
         if usingDefaultConditions {
             // Python always passes real conditioning from prepare_condition (text/lyric/refer → encoder_hidden_states, context_latents).
             // Zeros produce unstructured/noise-like audio. App should provide a ConditioningProvider that returns real encoder + context.
