@@ -30,7 +30,9 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
         
         // Load MLModel
         let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndGPU // Bypass ANE due to ios17.mul broadcasting crash with dynamic shapes
+        // Bypass ANE and GPU to avoid MLIR pass manager crashes with Qwen dynamic shapes.
+        // The text encoder only runs once per generation, so CPU performance is perfectly adequate.
+        config.computeUnits = .cpuOnly 
         let compiledURL = try await CoreMLHelper.compileIfNeeded(modelURL: directory)
         let model = try MLModel(contentsOf: compiledURL, configuration: config)
         
@@ -101,11 +103,21 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
         
         let hiddenStates: MLXArray
         if outputFeature.dataType == .float16 {
-            let outputShaped = MLShapedArray<Float16>(outputFeature)
-            hiddenStates = MLXArray(outputShaped.scalars, outputShaped.shape)
+            let count = outputFeature.count
+            let shape = outputFeature.shape.map { $0.intValue }
+            if let lastDim = shape.last, lastDim > 16384 {
+                throw CoreMLTextHiddenStateProviderError.invalidOutputShape("Core ML text encoder returned shape \(shape), which appears to be a logits/vocab tensor instead of hidden states.")
+            }
+            let pointer = outputFeature.dataPointer.bindMemory(to: Float16.self, capacity: count)
+            let buffer = UnsafeBufferPointer(start: pointer, count: count)
+            hiddenStates = MLXArray(Array(buffer), shape)
         } else {
             let outputShaped = MLShapedArray<Float32>(outputFeature)
-            hiddenStates = MLXArray(outputShaped.scalars, outputShaped.shape)
+            let shape = outputShaped.shape
+            if let lastDim = shape.last, lastDim > 16384 {
+                throw CoreMLTextHiddenStateProviderError.invalidOutputShape("Core ML text encoder returned shape \(shape), which appears to be a logits/vocab tensor instead of hidden states.")
+            }
+            hiddenStates = MLXArray(outputShaped.scalars, shape)
         }
         
         var maskFloats = [Float](repeating: 0, count: seqLen)
