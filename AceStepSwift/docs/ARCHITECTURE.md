@@ -238,20 +238,34 @@ See [scripts/README.md](../../scripts/README.md) and [GenerationSmokeTests](../T
 ## 6. CoreML Quantization and Generation
 
 ### 6.1 Conversion Pipeline
-The Python codebase provides a conversion script (`scripts/quantize_checkpoints.py`) to trace and convert both the DiT (`acestep-v15-turbo`) and VAE models to CoreML `.mlpackage` containers.
-CoreML requires fully static shapes during tracing, so the script enforces a `STATIC_SEQ_LEN` corresponding to exactly 5.0 seconds of generation data (e.g., length=128). The generated files can be packaged as 4-bit, 6-bit, and 8-bit palettized weights using `coremltools` compression. 
+The Python codebase provides a conversion script (`scripts/quantize_checkpoints.py`) to trace and convert the PyTorch models (`acestep-v15-turbo` and VAE) to CoreML `.mlpackage` containers directly. The tracing logic has been globally patched (e.g., overriding `repeat_kv` dimension inference) to allow fully dynamic sequence lengths, which lets us natively generate long audio sequences (e.g., 30 seconds) on-device without size constraints.
+
+To optimize the diffusion networks for local deployment without catastrophic degradation, the script implements custom `coremltools` weight palettization strategies:
+- Tensors are compressed using linear quantizers to 8-bit, 6-bit, and 4-bit depths.
+- To prevent destructive noise loops, 1D normalization shapes (`embedding` and `layer_norm`) are bypassed entirely.
+- The default ML Program `weight_threshold` is elevated to `4096` to protect essential structural boundaries that would normally corrupt generation.
+- The pipeline also exports uncompressed `Float16` bundles (`-16bit.mlpackage`), which natively bypass `palettize_weights()` mapping, serving as the ground-truth deterministic evaluation set.
 
 **Artifacts Generated (`/quantized_checkpoints_coreml`):**
-- `acestep-v15-turbo-coreml-[4,6,8]bit.mlpackage`: CoreML wrapper for the main DiT network.
-- `vae-coreml-[4,6,8]bit.mlpackage`: CoreML wrapper for the `AutoencoderOobleck` VAE decoding phase. 
+- `acestep-v15-turbo-coreml-[4,6,8,16]bit.mlpackage`: CoreML wrapper for the main DiT network.
+- `vae-coreml-[4,6,8,16]bit.mlpackage`: CoreML wrapper for the `AutoencoderOobleck` VAE decoder.
 
 ### 6.2 Using CoreML in Swift
-Once exported, you can execute the pipeline entirely on the Apple Neural Engine (`ANE`), or GPU using the CoreML abstraction rather than standalone `MLX`. 
+Once exported, the pipeline can be executed natively on Apple Silicon using the Core ML backend (which routes execution over CPU/GPU dynamically based on the ML Program capabilities) rather than standalone `MLX`. 
 
-To use CoreML in the pipeline:
-1. Initialize the `CoreMLVAEDecoder` and `CoreMLDiTStepper` using the URLs for the generated `.mlpackage` bundles.
-2. Under the hood, the CoreML stepper will automatically convert `MLXArray` conditionings (e.g. `context_latents`, `encoder_hidden_states`) into floating-point buffers and inject them via an `MLDictionaryFeatureProvider`.
-3. Call `predict()` on the core model and manually extract the resulting output tensors as an updated `MLXArray` before continuing the SDE/ODE timestep generation loop.
+To use CoreML diffusion in Swift:
+1. Initialize the `CoreMLVAEDecoder` and `CoreMLDiTStepper` using local `URL` references for the generated `.mlpackage` bundles.
+2. Under the hood, `CoreMLDiTStepper.swift` converts `MLXArray` structures (like `context_latents` and `encoder_hidden_states`) directly into Core ML contiguous shapes inside an `MLDictionaryFeatureProvider`.
+3. **Critical Dimension Injection:** Unlike the PyTorch native runtime, the traced `.mlpackage` structurally requires exact mapping for generation contexts. The feature provider constructs dynamic down-sampled CPU ranges (`Int32(seq / 2)`) to provide the explicit `position_ids` and `cache_position` input arrays that block Core ML from silently emitting zero-vector static noise during inference.
+4. Calling `model.prediction` calculates the step velocity vector which is then mapped back to `MLXArray` and used in standard SDE/ODE execution inside `ContractGenerationPipeline.swift`.
+
+### 6.3 CoreML Smoke Testing
+The standard native evaluation suite requires validation of every bit-depth model (`16`, `8`, `6`, `4`) through an end-to-end extraction against PyTorch baseline audio runs. 
+
+1. `export_conditioning_for_swift.py` serializes ground-truth text token blocks, prompt embeddings, initial noise generation tensors, and contextual sequences into native `.bin` arrays on disk.
+2. The core runner orchestrator `scripts/run_generation_smoke_test.sh` iterates through each `.mlpackage` precision layer, bootstrapping environment routing matrices (e.g. `$TEST_RUNNER_COREML_16BIT_PATH`) and mapping them into native SPM testing environments.
+3. The Swift testing context executes individual evaluations (`CoreMLGenerationTests`), loads the Core ML environments, extracts full length (e.g. 30-second) sequences to intermediate `.wav` targets using native `AVAudioFile` blocks, and streams output shapes.
+4. Finally, the outputs are mathematically profiled against the PyTorch `python_out.wav` using `scripts/validate_audio.py` to ensure their dynamic variance structures execute consistently through local optimizations instead of falling back to empty static arrays.
 
 ---
 
