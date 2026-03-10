@@ -29,6 +29,7 @@ def main():
 
     # Flush Hugging Face's transformers modules cache for acestep to ensure local patches apply
     try:
+        import os
         cache_pattern = os.path.expanduser("~/.cache/huggingface/modules/transformers_modules/acestep*")
         for cache_dir in glob.glob(cache_pattern):
             shutil.rmtree(cache_dir, ignore_errors=True)
