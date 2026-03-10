@@ -85,11 +85,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     public func run(params: GenerationParams, config: GenerationConfig, progress: ((Double, String) -> Void)?) async throws -> GenerationResult {
         let b = config.batchSize
         var t = latentLengthFromDuration(durationSeconds: params.duration, sampleRate: sampleRate)
-        if stepper is CoreMLDiTStepper {
-            // CoreML DiT and VAE are currently quantized with STATIC_SEQ_LEN = 128 (~5.46 seconds)
-            // They cannot dynamically accept larger tensors without e5rt 'conv_transpose' errors.
-            t = 128
-        }
+
         let schedule = DiffusionSchedule.getTimestepSchedule(
             shift: params.shift,
             timesteps: params.timesteps,
