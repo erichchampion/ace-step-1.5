@@ -57,6 +57,11 @@ public final class CoreMLDiTStepper: DiffusionStepper {
             let ctxData = ctxLatents.contiguous().asArray(Float.self)
             let ctxShaped = MLShapedArray<Float>(scalars: ctxData, shape: [batch, seq, ctxW])
             
+            let downSeq = seq / 2
+            let positionsData = (0..<downSeq).map { Int32($0) }
+            let posShaped = MLShapedArray<Int32>(scalars: positionsData, shape: [batch, downSeq])
+            let cacheShaped = MLShapedArray<Int32>(scalars: positionsData, shape: [downSeq])
+            
             let inputProvider = try MLDictionaryFeatureProvider(dictionary: [
                 "hidden_states": MLMultiArray(latentShaped),
                 "timestep": MLMultiArray(tShaped),
@@ -64,7 +69,9 @@ public final class CoreMLDiTStepper: DiffusionStepper {
                 "attention_mask": MLMultiArray(maskShaped),
                 "encoder_hidden_states": MLMultiArray(encShaped),
                 "encoder_attention_mask": MLMultiArray(encMaskShaped),
-                "context_latents": MLMultiArray(ctxShaped)
+                "context_latents": MLMultiArray(ctxShaped),
+                "position_ids": MLMultiArray(posShaped),
+                "cache_position": MLMultiArray(cacheShaped)
             ])
             
             let output = try model.prediction(from: inputProvider)

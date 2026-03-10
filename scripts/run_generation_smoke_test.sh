@@ -163,7 +163,7 @@ if [ -d "$COREML_DIR" ]; then
   echo ""
   echo "=== Core ML Generation ==="
   
-  for BIT in 4 6 8; do
+  for BIT in 16 8 6 4; do
     if ls "$COREML_DIR"/*${BIT}bit* 1> /dev/null 2>&1 || [ -n "$(find "$COREML_DIR" -name "*${BIT}bit*")" ]; then
       export COREML_${BIT}BIT_PATH="$COREML_DIR"
       export TEST_RUNNER_COREML_${BIT}BIT_PATH="$COREML_DIR"
@@ -184,9 +184,10 @@ echo "=== Validation ==="
 TO_VALIDATE=()
 [ -f "$OUTPUT_DIR/python_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/python_out.wav")
 [ -f "$OUTPUT_DIR/swift_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_out.wav")
-[ -f "$OUTPUT_DIR/swift_4bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_4bit_out.wav")
-[ -f "$OUTPUT_DIR/swift_6bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_6bit_out.wav")
+[ -f "$OUTPUT_DIR/swift_16bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_16bit_out.wav")
 [ -f "$OUTPUT_DIR/swift_8bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_8bit_out.wav")
+[ -f "$OUTPUT_DIR/swift_6bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_6bit_out.wav")
+[ -f "$OUTPUT_DIR/swift_4bit_out.wav" ] && TO_VALIDATE+=("$OUTPUT_DIR/swift_4bit_out.wav")
 
 if [ ${#TO_VALIDATE[@]} -eq 0 ]; then
   echo "No output files to validate (python_out.wav, swift_out.wav missing)"

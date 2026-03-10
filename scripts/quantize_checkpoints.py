@@ -145,7 +145,7 @@ def main():
         log(f"\n--- Processing Model: {item.name} ---")
 
         bits_to_process = []
-        for bits in [8, 6, 4]:
+        for bits in [16, 8, 6, 4]:
             output_path = quantized_dir / f"{item.name}-coreml-{bits}bit.mlpackage"
             if not output_path.exists():
                 bits_to_process.append(bits)
@@ -376,16 +376,26 @@ def main():
             
             for bits in bits_to_process:
                 output_path = quantized_dir / f"{item.name}-coreml-{bits}bit.mlpackage"
-                log(f"  [{bits}-bit] Applying palettization...")
                 try:
-                    op_config = ct.optimize.coreml.OpPalettizerConfig(mode="kmeans", nbits=bits, weight_threshold=512)
-                    config = ct.optimize.coreml.OptimizationConfig(
-                        global_config=op_config,
-                        op_type_configs={"conv": None, "conv_transpose": None}
-                    )
-                    compressed_mlmodel = ct.optimize.coreml.palettize_weights(mlmodel, config=config)
-                    log(f"  [{bits}-bit] Saving to '{output_path}'...")
-                    compressed_mlmodel.save(str(output_path))
+                    if bits == 16:
+                        log(f"  [16-bit] Saving uncompressed mlprogram directly to '{output_path}'...")
+                        mlmodel.save(str(output_path))
+                        log(f"  [16-bit] Successfully created '{output_path}'.")
+                    else:
+                        log(f"  [{bits}-bit] Applying palettization...")
+                        op_config = ct.optimize.coreml.OpPalettizerConfig(mode="kmeans", nbits=bits, weight_threshold=4096)
+                        config = ct.optimize.coreml.OptimizationConfig(
+                            global_config=op_config,
+                            op_type_configs={"conv": None, "conv_transpose": None, "embedding": None}
+                        )
+                        compressed_mlmodel = ct.optimize.coreml.palettize_weights(mlmodel, config=config)
+                        log(f"  [{bits}-bit] Saving to '{output_path}'...")
+                        compressed_mlmodel.save(str(output_path))
+                        log(f"  [{bits}-bit] Successfully created '{output_path}'.")
+                        
+                        if 'compressed_mlmodel' in locals(): del compressed_mlmodel
+                        compressed_mlmodel = None
+                        gc.collect()
                     log(f"  [{bits}-bit] Successfully created '{output_path}'.")
                     if null_emb is not None:
                         import safetensors.torch

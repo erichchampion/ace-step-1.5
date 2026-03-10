@@ -148,10 +148,11 @@ final class CoreMLGenerationTests: XCTestCase {
         
         // Find DiT .mlpackage and VAE .mlpackage in the specified directory
         // Determine bit depth to search for
+        let is16Bit = envVar.contains("16BIT")
         let is8Bit = envVar.contains("8BIT")
         let is6Bit = envVar.contains("6BIT")
         let is4Bit = envVar.contains("4BIT")
-        let bitSuffix = is8Bit ? "-8bit" : (is6Bit ? "-6bit" : (is4Bit ? "-4bit" : ""))
+        let bitSuffix = is16Bit ? "-16bit" : (is8Bit ? "-8bit" : (is6Bit ? "-6bit" : (is4Bit ? "-4bit" : "")))
         
         // Find DiT .mlpackage and VAE .mlpackage in the specified directory
         let ditURL = try findMLPackage(in: baseURL, prefix: "acestep-v15-turbo", suffix: bitSuffix)
@@ -225,6 +226,10 @@ final class CoreMLGenerationTests: XCTestCase {
 
     func test6BitGeneration() async throws {
         try await runCoreMLGeneration(envVar: "COREML_6BIT_PATH", outputFilename: "swift_6bit_out.wav")
+    }
+
+    func test16BitGeneration() async throws {
+        try await runCoreMLGeneration(envVar: "COREML_16BIT_PATH", outputFilename: "swift_16bit_out.wav")
     }
 
     func test8BitGeneration() async throws {
