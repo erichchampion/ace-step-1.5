@@ -263,11 +263,12 @@ def main():
                             super().__init__()
                             self.m = m
                             self.is_turbo = getattr(m.config, 'is_turbo', False)
-                        def forward(self, hidden_states, timestep, timestep_r, attention_mask, encoder_hidden_states, encoder_attention_mask, context_latents):
+                        def forward(self, hidden_states, timestep, timestep_r, attention_mask, encoder_hidden_states, encoder_attention_mask, context_latents, position_ids, cache_position):
                             kwargs = {
                                 'hidden_states': hidden_states, 'timestep': timestep, 'timestep_r': timestep_r,
                                 'attention_mask': attention_mask, 'encoder_hidden_states': encoder_hidden_states,
                                 'encoder_attention_mask': encoder_attention_mask, 'context_latents': context_latents,
+                                'position_ids': position_ids, 'cache_position': cache_position,
                                 'use_cache': False
                             }
                             if self.is_turbo:
@@ -291,16 +292,20 @@ def main():
                         torch.randn((1, 128, 64), dtype=torch.float32), torch.randn((1,), dtype=torch.float32),
                         torch.randn((1,), dtype=torch.float32), torch.ones((1, 128), dtype=torch.float32),
                         torch.randn((1, 100, 2048), dtype=torch.float32), torch.randn((1, 100), dtype=torch.float32),
-                        torch.randn((1, 128, 128), dtype=torch.float32)
+                        torch.randn((1, 128, 128), dtype=torch.float32), 
+                        torch.arange(64, dtype=torch.int64).unsqueeze(0),
+                        torch.arange(64, dtype=torch.int64)
                     )
                     inputs_schema = [
                         ct.TensorType(name="hidden_states", shape=(1, ct.RangeDim(16, 32768, default=128), 64), dtype=np.float32),
                         ct.TensorType(name="timestep", shape=(1,), dtype=np.float32),
                         ct.TensorType(name="timestep_r", shape=(1,), dtype=np.float32),
                         ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(16, 32768, default=128)), dtype=np.float32),
-                        ct.TensorType(name="encoder_hidden_states", shape=(1, ct.RangeDim(1, 512, default=100), 2048), dtype=np.float32),
-                        ct.TensorType(name="encoder_attention_mask", shape=(1, ct.RangeDim(1, 512, default=100)), dtype=np.float32),
-                        ct.TensorType(name="context_latents", shape=(1, ct.RangeDim(16, 32768, default=128), 128), dtype=np.float32)
+                        ct.TensorType(name="encoder_hidden_states", shape=(1, ct.RangeDim(1, 4096, default=100), 2048), dtype=np.float32),
+                        ct.TensorType(name="encoder_attention_mask", shape=(1, ct.RangeDim(1, 4096, default=100)), dtype=np.float32),
+                        ct.TensorType(name="context_latents", shape=(1, ct.RangeDim(16, 32768, default=128), 128), dtype=np.float32),
+                        ct.TensorType(name="position_ids", shape=(1, ct.RangeDim(8, 16384, default=64)), dtype=np.int32),
+                        ct.TensorType(name="cache_position", shape=(ct.RangeDim(8, 16384, default=64),), dtype=np.int32)
                     ]
                     outputs_schema = [ct.TensorType(name="velocity")]
                 else:

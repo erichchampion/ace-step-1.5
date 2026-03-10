@@ -58,6 +58,7 @@ def create_4d_mask(
     sliding_window: Optional[int] = None,
     is_sliding_window: bool = False,
     is_causal: bool = True,
+    mask_len: Optional[int] = None,
 ) -> torch.Tensor:
     """
     General 4D Attention Mask generator compatible with CPU/Mac/SDPA and Eager mode.
@@ -68,21 +69,25 @@ def create_4d_mask(
     4. Bidirectional Sliding: is_causal=False, is_sliding_window=True (Longformer local)
 
     Returns:
-        [Batch, 1, Seq_Len, Seq_Len] additive mask (0.0 for keep, -inf for mask)
+        [Batch, 1, Seq_Len, Mask_Len] additive mask (0.0 for keep, -inf for mask)
     """
+    if mask_len is None:
+        mask_len = seq_len
+
     # ------------------------------------------------------
-    # 1. Construct basic geometry mask [Seq_Len, Seq_Len]
+    # 1. Construct basic geometry mask [Seq_Len, Mask_Len]
     # ------------------------------------------------------
 
     # Build index matrices
-    # i (Query): [0, 1, ..., L-1]
-    # j (Key):   [0, 1, ..., L-1]
-    indices = torch.arange(seq_len, device=device)
+    # i (Query): [0, 1, ..., seq_len-1]
+    # j (Key):   [0, 1, ..., mask_len-1]
+    queries = torch.arange(seq_len, device=device)
+    keys = torch.arange(mask_len, device=device)
     # diff = i - j
-    diff = indices.unsqueeze(1) - indices.unsqueeze(0)
+    diff = queries.unsqueeze(1) - keys.unsqueeze(0)
 
     # Initialize all True (all positions visible)
-    valid_mask = torch.ones((seq_len, seq_len), device=device, dtype=torch.bool)
+    valid_mask = torch.ones((seq_len, mask_len), device=device, dtype=torch.bool)
 
     # (A) Handle causality (Causal)
     if is_causal:
@@ -1413,16 +1418,18 @@ class AceStepDiTModel(AceStepPreTrainedModel):
             )
             max_len = max(seq_len, encoder_seq_len)
             
+            # Encoder attention mask needs to match the target sequence length
+            # and attend to the encoder sequence length
             encoder_attention_mask = create_4d_mask(
-                seq_len=max_len,
+                seq_len=seq_len,
                 dtype=dtype,
                 device=device,
                 attention_mask=attention_mask,     # [B, L]
                 sliding_window=None,
                 is_sliding_window=False,
-                is_causal=False                    # <--- 关键：双向注意力
+                is_causal=False,
+                mask_len=encoder_seq_len
             )
-            encoder_attention_mask = encoder_attention_mask[:, :, :seq_len, :encoder_seq_len]
             # 2. Sliding Attention (Bidirectional, Local)
             # 对应原来的 create_sliding_window... + bidirectional
             if self.config.use_sliding_window:

@@ -1,5 +1,5 @@
 /**
- Fake VAE decoder that returns zeros with shape [B, T*2048] from latent [B, T, 64].
+ Fake VAE decoder that returns zeros with shape [B, T*1920] from latent [B, T, 64].
  Used to satisfy the VAEDecoder contract in tests without a real VAE model.
  */
 

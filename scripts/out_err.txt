@@ -1,0 +1,3 @@
+Skipping import of cpp extensions due to incompatible torch version 2.10.0 for torchao version 0.15.0             Please see https://github.com/pytorch/ao/issues/2919 for more info
+W0309 22:42:34.703000 63292 torch/distributed/elastic/multiprocessing/redirects.py:29] NOTE: Redirects are currently not supported in Windows or MacOs.
+`torch_dtype` is deprecated! Use `dtype` instead!

@@ -97,7 +97,7 @@ fi
 CONDITIONING_DIR="$OUTPUT_DIR/conditioning"
 if [ -d "$CHECKPOINTS_DIR/$ACESTEP_CONFIG_PATH" ]; then
   echo "Exporting conditioning for Swift..."
-  if "$REPO_ROOT"/.venv/bin/python3 scripts/export_conditioning_for_swift.py --output-dir "$CONDITIONING_DIR" 2>&1; then
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/export_conditioning_for_swift.py --output-dir "$CONDITIONING_DIR" --duration "$SMOKE_DURATION" --caption "uptempo electronic dance music, continuous beat, playing for the entire duration, fading out at the end" 2>&1; then
     echo "Conditioning exported to $CONDITIONING_DIR"
   else
     echo "Conditioning export failed (Swift may use zeros and produce garbled audio)"
