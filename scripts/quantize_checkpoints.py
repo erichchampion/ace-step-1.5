@@ -311,15 +311,26 @@ def main():
                             self.m = m
                             self.is_text_encoder = is_text_encoder
                         def forward(self, input_ids, attention_mask):
-                            out = self.m(input_ids=input_ids, attention_mask=attention_mask, use_cache=False, return_dict=False)
                             if self.is_text_encoder:
-                                # Standard AutoModelForCausalLM structure has inner model at `m.model`
-                                # But if loaded via AutoModel, out[0] might already be hidden states.
-                                # Check if out[0] has vocab size vs hidden dim.
+                                # For text encoders, we want the hidden states (dim 1024), not the vocab shape (dim 151669)
                                 if hasattr(self.m, "model"):
-                                    return self.m.model(input_ids=input_ids, attention_mask=attention_mask)[0]
-                                return out[0]
-                            return out[0]
+                                    # Calling the inner model directly avoids tracing the LM head completely
+                                    out = self.m.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=False)
+                                    if isinstance(out, tuple):
+                                        return out[0]
+                                    return out
+                                else:
+                                    out = self.m(input_ids=input_ids, attention_mask=attention_mask, use_cache=False, return_dict=False)
+                                    if hasattr(out, "last_hidden_state"):
+                                        return out.last_hidden_state
+                                    if isinstance(out, tuple):
+                                        return out[0]
+                                    return out
+                            else:
+                                out = self.m(input_ids=input_ids, attention_mask=attention_mask, use_cache=False, return_dict=False)
+                                if isinstance(out, tuple):
+                                    return out[0]
+                                return out
                     wrapped_model = CausalMWrapper(model, is_text_encoder).eval()
                     import os
                     os.environ["STATIC_SEQ_LEN"] = "128"
