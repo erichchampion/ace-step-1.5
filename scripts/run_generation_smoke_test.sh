@@ -5,7 +5,8 @@
 #
 # Usage:
 #   ./scripts/run_generation_smoke_test.sh
-#   SMOKE_DURATION=5.0 ./scripts/run_generation_smoke_test.sh      # longer clip
+#   ./scripts/run_generation_smoke_test.sh --duration 10.0          # specify length in seconds
+#   SMOKE_DURATION=30.0 ./scripts/run_generation_smoke_test.sh      # longer clip
 #   SMOKE_STEPS=8 ./scripts/run_generation_smoke_test.sh            # more diffusion steps
 #   SMOKE_EXTRA_TESTS=1 ./scripts/run_generation_smoke_test.sh      # run parameter variation tests
 #
@@ -16,7 +17,7 @@
 #   DIT_WEIGHTS_PATH    DiT checkpoint dir (model.safetensors). Set automatically when checkpoints/$ACESTEP_CONFIG_PATH exists.
 #   VAE_WEIGHTS_PATH    VAE decoder safetensors path. Set automatically when checkpoints/vae/decoder.safetensors exists.
 #   CONDITIONING_DIR    Dir with encoder_hidden_states.bin and context_latents.bin for Swift. Set by export_conditioning_for_swift.py.
-#   SMOKE_DURATION      Duration in seconds for generated audio (default: 5.0).
+#   SMOKE_DURATION      Duration in seconds for generated audio (default: 30.0).
 #   SMOKE_STEPS         Number of diffusion steps (default: 8).
 #   SMOKE_SEED          Random seed (default: 42).
 #   SMOKE_EXTRA_TESTS   When set to 1, run additional parameter variation tests.
@@ -30,10 +31,19 @@ mkdir -p "$OUTPUT_DIR"
 echo "Output directory: $OUTPUT_DIR"
 
 # Configurable generation parameters
-SMOKE_DURATION="${SMOKE_DURATION:-5.0}"
+SMOKE_DURATION="${SMOKE_DURATION:-30.0}"
 SMOKE_STEPS="${SMOKE_STEPS:-8}"
 SMOKE_SEED="${SMOKE_SEED:-42}"
 SMOKE_EXTRA_TESTS="${SMOKE_EXTRA_TESTS:-0}"
+
+# Parse command line arguments
+while [[ "$#" -gt 0 ]]; do
+  case $1 in
+    --duration) SMOKE_DURATION="$2"; shift ;;
+    *) echo "Unknown parameter passed: $1"; exit 1 ;;
+  esac
+  shift
+done
 
 echo "Generation params: duration=${SMOKE_DURATION}s, steps=${SMOKE_STEPS}, seed=${SMOKE_SEED}"
 
@@ -55,7 +65,7 @@ if [ -d "$CHECKPOINTS_DIR/$ACESTEP_CONFIG_PATH" ]; then
   echo ""
   echo "=== Python Generation (config: $ACESTEP_CONFIG_PATH) ==="
   export ACESTEP_CONFIG_PATH
-  if "$REPO_ROOT"/.venv/bin/python3 scripts/generate_audio.py --output-dir "$OUTPUT_DIR" --duration "$SMOKE_DURATION" --seed "$SMOKE_SEED"; then
+  if "$REPO_ROOT"/.venv/bin/python3 scripts/generate_audio.py --output-dir "$OUTPUT_DIR" --duration "$SMOKE_DURATION" --seed "$SMOKE_SEED" --caption "uptempo electronic dance music, continuous beat, playing for the entire duration, fading out at the end"; then
     echo "Python generator: ok"
   else
     echo "Python generator: failed (continuing)"
