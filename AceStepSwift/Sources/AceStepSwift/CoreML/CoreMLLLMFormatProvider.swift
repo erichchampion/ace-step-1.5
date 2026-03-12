@@ -32,7 +32,8 @@ public final class CoreMLLLMFormatProvider: LLMFormatProvider {
         
         // Load MLModel
         let config = MLModelConfiguration()
-        config.computeUnits = .all
+        // Bypass ANE to avoid MLIR pass manager crashes and ios17.mul broadcasting bugs with dynamic shapes
+        config.computeUnits = .cpuOnly
         
         let compiledURL = try await CoreMLHelper.compileIfNeeded(modelURL: directory)
         let loadedModel = try MLModel(contentsOf: compiledURL, configuration: config)
