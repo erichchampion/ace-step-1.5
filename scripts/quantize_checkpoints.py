@@ -8,6 +8,7 @@ Parallel directories will be created for each quantized model.
 import os
 import sys
 import gc
+import sympy.printing
 import argparse
 import traceback
 import math
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Optional, List, Union, Tuple
 
 def main():
+    import os
+    import glob
     parser = argparse.ArgumentParser(description="Quantize models to Core ML format.")
     parser.add_argument("model_name", type=str, nargs="?", help="Optional: Name of a specific model to quantize.")
     args = parser.parse_args()
@@ -29,7 +32,6 @@ def main():
 
     # Flush Hugging Face's transformers modules cache for acestep to ensure local patches apply
     try:
-        import os
         cache_pattern = os.path.expanduser("~/.cache/huggingface/modules/transformers_modules/acestep*")
         for cache_dir in glob.glob(cache_pattern):
             shutil.rmtree(cache_dir, ignore_errors=True)
@@ -100,7 +102,7 @@ def main():
             batch_size, seq_len = input_embeds.shape[0], input_embeds.shape[1]
             mask = torch.ones((1, 1, seq_len, seq_len), dtype=torch.bool, device=input_embeds.device)
             mask = torch.tril(mask)
-            final_mask = (1.0 - mask.to(input_embeds.dtype)) * torch.finfo(input_embeds.dtype).min
+            final_mask = (1.0 - mask.to(input_embeds.dtype)) * -65500.0
             return final_mask
         transformers.masking_utils.create_causal_mask = fake_create_causal_mask
         if hasattr(transformers.models, "qwen3"):
@@ -199,7 +201,6 @@ def main():
                 
                 # Align shapes to 128 to match the 5.0 second Swift test length
                 # Trace with a small example input for fast PyTorch graph construction
-                import os
                 if "STATIC_SEQ_LEN" in os.environ:
                     del os.environ["STATIC_SEQ_LEN"]
                 b, c, t = 1, 64, 128
@@ -235,21 +236,22 @@ def main():
                         log("  [Patch] Applied unpack_timbre_embeddings patch.")
 
                     # Patch create_4d_mask to avoid torch.arange int() casts during JIT trace!
-                    import transformers_modules.acestep_hyphen_v15_hyphen_base.modeling_acestep_v15_base as acestep_module
+                    acestep_module_name = type(model).__module__
+                    import sys
+                    acestep_module = sys.modules[acestep_module_name]
                     original_create_4d_mask = acestep_module.create_4d_mask
                     def patched_create_4d_mask(seq_len, dtype, device, attention_mask=None, sliding_window=None, is_sliding_window=False, is_causal=True, mask_len=None):
                         if mask_len is None:
                             mask_len = seq_len
                             
                         # If simple unmasked bidirectional attention, just expand the padding mask!
-                        if not is_causal and not is_sliding_window:
+                        if not is_causal:
                             if attention_mask is not None:
-                                p_mask = attention_mask.narrow(1, 0, mask_len).unsqueeze(1).unsqueeze(2).to(torch.bool)
+                                p_mask = attention_mask.unsqueeze(1).unsqueeze(2).to(torch.bool)
                                 # p_mask is [B, 1, 1, mask_len]
-                                min_dtype = torch.finfo(dtype).min
                                 zero = torch.tensor(0.0, dtype=dtype, device=device)
-                                inf = torch.tensor(min_dtype, dtype=dtype, device=device)
-                                return torch.where(p_mask, zero, inf)
+                                inf_val = torch.tensor(-65500.0, dtype=dtype, device=device)
+                                return torch.where(p_mask, zero, inf_val)
                             else:
                                 return torch.zeros((1, 1, 1, 1), dtype=dtype, device=device)
                         
@@ -286,7 +288,6 @@ def main():
                             return out[0]
                     # model.decoder.layers = model.decoder.layers[:1] # REMOVED layer limit
                     wrapped_model = AcestepWrapper(model).eval()
-                    import os
                     if "STATIC_SEQ_LEN" in os.environ:
                         del os.environ["STATIC_SEQ_LEN"]
                     example_input = (
@@ -338,7 +339,6 @@ def main():
                                     return out[0]
                                 return out
                     wrapped_model = CausalMWrapper(model, is_text_encoder).eval()
-                    import os
                     os.environ["STATIC_SEQ_LEN"] = "128"
                     example_input = (torch.zeros((1, 128), dtype=torch.int32), torch.ones((1, 128), dtype=torch.int32))
                     inputs_schema = [

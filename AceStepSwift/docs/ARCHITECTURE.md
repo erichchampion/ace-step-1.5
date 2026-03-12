@@ -256,8 +256,13 @@ Once exported, the pipeline can be executed natively on Apple Silicon using the 
 To use CoreML diffusion in Swift:
 1. Initialize the `CoreMLVAEDecoder` and `CoreMLDiTStepper` using local `URL` references for the generated `.mlpackage` bundles.
 2. Under the hood, `CoreMLDiTStepper.swift` converts `MLXArray` structures (like `context_latents` and `encoder_hidden_states`) directly into Core ML contiguous shapes inside an `MLDictionaryFeatureProvider`.
-3. **Critical Dimension Injection:** Unlike the PyTorch native runtime, the traced `.mlpackage` structurally requires exact mapping for generation contexts. The feature provider constructs dynamic down-sampled CPU ranges (`Int32(seq / 2)`) to provide the explicit `position_ids` and `cache_position` input arrays that block Core ML from silently emitting zero-vector static noise during inference.
+3. **Critical Dimension Injection:** Unlike the PyTorch native runtime, the traced `.mlpackage` structurally requires exact mapping for generation contexts. The feature provider constructs dynamic down-sampled CPU ranges (`Int32(seq / 2)`, aligning with `patch_size=2`) to provide explicit `position_ids` and `cache_position` input arrays that block Core ML from silently failing SDE inferences.
 4. Calling `model.prediction` calculates the step velocity vector which is then mapped back to `MLXArray` and used in standard SDE/ODE execution inside `ContractGenerationPipeline.swift`.
+
+**⚠️ Known Apple Framework Limitation (Palettization Shape Overflows):**
+While the `16bit` compiled Core ML DiT operates flawlessly across dynamic lengths, deploying the mathematically identical graph under `8-bit`, `6-bit`, or `4-bit` palettization (via `coremltools.optimize.coreml.palettize_weights`) introduces severe runtime instabilities. Specifically, structural transformations caused by the K-means sub-byte mapping corrupt dynamic tensor inference scopes within the `slice_by_index` bindings, leading to:
+`[e5rt] E5RT encountered an STL exception. msg = Failed to PropagateInputTensorShapes: std::runtime_error during type inference for ios17.slice_by_index: zero shape error.`
+This prevents compressed models from being practically viable out of the box in iOS 17 / macOS 18 execution environments. End-users must default to deploying the `16bit` packages if runtime tensor length variability and dynamic RoPE coordinates are required.
 
 ### 6.3 CoreML Smoke Testing
 The standard native evaluation suite requires validation of every bit-depth model (`16`, `8`, `6`, `4`) through an end-to-end extraction against PyTorch baseline audio runs. 
