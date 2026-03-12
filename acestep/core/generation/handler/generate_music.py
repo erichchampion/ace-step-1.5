@@ -129,6 +129,8 @@ class GenerateMusicMixin:
         latent_shift: float = 0.0,
         latent_rescale: float = 1.0,
         chunk_mask_mode: str = "auto",
+        repaint_latent_crossfade_frames: int = 10,
+        repaint_wav_crossfade_sec: float = 0.0,
         progress=None,
     ) -> Dict[str, Any]:
         """Generate audio from text/reference inputs and return response payload.
@@ -239,6 +241,7 @@ class GenerateMusicMixin:
                 cfg_interval_end=cfg_interval_end,
                 shift=shift,
                 infer_method=infer_method,
+                repaint_crossfade_frames=repaint_latent_crossfade_frames,
             )
             outputs = service_run["outputs"]
             infer_steps_for_progress = service_run["infer_steps_for_progress"]
@@ -266,6 +269,7 @@ class GenerateMusicMixin:
                     repainting_starts=repainting_start_batch,
                     repainting_ends=repainting_end_batch,
                     sample_rate=self.sample_rate,
+                    crossfade_duration=repaint_wav_crossfade_sec,
                 )
             result = self._build_generate_music_success_payload(
                 outputs=outputs,

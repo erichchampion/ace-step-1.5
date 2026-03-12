@@ -57,7 +57,7 @@ def apply_repaint_waveform_splice(
     repainting_starts: List[float],
     repainting_ends: List[float],
     sample_rate: int = 48000,
-    crossfade_duration: float = 0.01,
+    crossfade_duration: float = 0.0,
 ) -> torch.Tensor:
     """Splice original user waveform into non-repaint regions after VAE decode.
 
@@ -68,7 +68,7 @@ def apply_repaint_waveform_splice(
         repainting_ends: Per-batch end time in seconds.
         sample_rate: Audio sample rate (default 48000).
         crossfade_duration: Crossfade length in seconds at splice boundaries
-            (default 0.01 = 10 ms).
+            (default 0.0 = hard cut; try 0.01 for 10 ms ramp).
 
     Returns:
         Spliced waveform tensor with same shape as ``pred_wavs``.
