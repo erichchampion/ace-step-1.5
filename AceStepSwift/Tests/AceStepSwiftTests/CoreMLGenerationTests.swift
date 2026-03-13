@@ -91,7 +91,38 @@ final class CoreMLGenerationTests: XCTestCase {
     }
 
     private func writeWAV(samples: [Float], sampleRate: Int, channels: Int, to url: URL) throws {
-        let count = samples.count
+        let targetPeakLinear: Float = 0.8912509
+        var normalized = samples
+        
+        if channels == 1 {
+            let mean = samples.reduce(0, +) / Float(samples.count)
+            normalized = samples.map { $0 - mean }
+            let peak = normalized.map { abs($0) }.max() ?? 0
+            if peak > 1e-6 {
+                let gain = targetPeakLinear / peak
+                normalized = normalized.map { $0 * gain }
+            }
+        } else if channels == 2 {
+            var left: [Float] = []
+            var right: [Float] = []
+            for i in stride(from: 0, to: samples.count - 1, by: 2) {
+                left.append(samples[i])
+                right.append(samples[i + 1])
+            }
+            let lMean = left.reduce(0, +) / Float(left.count)
+            let rMean = right.reduce(0, +) / Float(right.count)
+            for i in stride(from: 0, to: samples.count - 1, by: 2) {
+                normalized[i] -= lMean
+                normalized[i + 1] -= rMean
+            }
+            let peak = normalized.map { abs($0) }.max() ?? 0
+            if peak > 1e-6 {
+                let gain = targetPeakLinear / peak
+                normalized = normalized.map { $0 * gain }
+            }
+        }
+
+        let count = normalized.count
         var data = Data(capacity: 44 + count * 2)
         func appendU8(_ v: UInt8) { data.append(v) }
         func appendU16(_ v: UInt16) {
@@ -119,7 +150,7 @@ final class CoreMLGenerationTests: XCTestCase {
         appendU16(16)
         data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
         appendU32(UInt32(numBytes))
-        for s in samples {
+        for s in normalized {
             let clamped = max(-1.0, min(1.0, s))
             let v = Int16(clamped * 32767)
             data.append(UInt8(v & 0xff))

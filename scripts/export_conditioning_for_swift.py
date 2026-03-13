@@ -168,22 +168,32 @@ def main() -> int:
     _write_bin(out_dir / "encoder_hidden_states.bin", enc)
     _write_bin(out_dir / "context_latents.bin", ctx)
 
+    pred_latents = extra.get("pred_latents")
+    if pred_latents is not None:
+        import numpy as np
+        np.save("python_latents.npy", pred_latents.detach().cpu().numpy())
+        print(f"  python_latents.npy saved with shape {tuple(pred_latents.shape)}")
+
     # Export null_condition_embedding for guidance (CFG/APG)
     null_cond = getattr(handler.model, "null_condition_emb", None)
     if null_cond is not None:
         _write_bin(out_dir / "null_condition_embedding.bin", null_cond)
         print(f"  null_condition_embedding.bin shape {tuple(null_cond.shape)}", file=sys.stderr)
 
-    # Export initial noise (same seed 42, shape [1, T, 64]) so Swift can use identical noise.
-    t_len = int(ctx.shape[1])
+    # Export initial noise from PyTorch so Swift can use IDENTICAL initial noise.
     try:
+        import torch
         import numpy as np
-        import mlx.core as mx
-        key = mx.random.key(42)
-        noise_mlx = mx.random.normal((1, t_len, 64), key=key)
-        noise_np = np.asarray(noise_mlx, dtype=np.float32)
-        _write_bin(out_dir / "initial_noise.bin", noise_np)
-        print(f"  initial_noise.bin shape (1, {t_len}, 64)", file=sys.stderr)
+        pt_file = "mlx_initial_noise.npy"
+        if os.path.exists(pt_file):
+            try:
+                np_arr = np.load(pt_file)
+                _write_bin(out_dir / "initial_noise.bin", np_arr)
+                print(f"  initial_noise.bin shape {tuple(np_arr.shape)} [FROM {pt_file}]", file=sys.stderr)
+            except Exception as e:
+                print(f"  Error processing {pt_file}: {e}", file=sys.stderr)
+        else:
+            print(f"  Skipping initial_noise.bin: {pt_file} not found.", file=sys.stderr)
     except Exception as e:
         print(f"  Skipping initial_noise.bin: {e}", file=sys.stderr)
 

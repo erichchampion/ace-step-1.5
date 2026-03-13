@@ -44,7 +44,10 @@ private let minLatentLength = 128
 public func latentLengthFromDuration(durationSeconds: Double, sampleRate: Int) -> Int {
     guard durationSeconds > 0 else { return defaultLatentLength }
     let samples = durationSeconds * Double(sampleRate)
-    let t = Int(ceil(samples / Double(vaeLatentToSamplesFactor)))
+    var t = Int(ceil(samples / Double(vaeLatentToSamplesFactor)))
+    if t % 2 != 0 {
+        t -= 1 // Ensure parity for patch_size=2 downsampling without dropping residuals in CoreML
+    }
     return max(minLatentLength, max(1, t))
 }
 
@@ -84,7 +87,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
 
     public func run(params: GenerationParams, config: GenerationConfig, progress: ((Double, String) -> Void)?) async throws -> GenerationResult {
         let b = config.batchSize
-        var t = latentLengthFromDuration(durationSeconds: params.duration, sampleRate: sampleRate)
+        let t = latentLengthFromDuration(durationSeconds: params.duration, sampleRate: sampleRate)
 
         let schedule = DiffusionSchedule.getTimestepSchedule(
             shift: params.shift,
@@ -140,7 +143,10 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         
         var apgMomentumState: [String: MLXArray]? = [:]
         for (stepIdx, timestepVal) in schedule.enumerated() {
+            print("[PipelineLoop] stepIdx=\(stepIdx) t=\(timestepVal)")
+            
             let nextT: Float? = (stepIdx + 1 < schedule.count) ? Float(schedule[stepIdx + 1]) : nil
+            let previousLatent = xt
             xt = runDiffusionStep(
                 currentLatent: xt,
                 timestep: Float(timestepVal),
@@ -152,8 +158,10 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             #if DEBUG
             let stepStats = tensorMeanStd(xt)
             let variance = stepStats.std * stepStats.std
+            let vtDiff = previousLatent - xt
+            let vtStats = tensorMeanStd(vtDiff)
             debugPrint(
-                "[GenerationDiagnostics] step=\(stepIdx + 1)/\(schedule.count) t=\(formatStat(Float(timestepVal))) latent_var=\(formatStat(variance)) mean=\(formatStat(stepStats.mean)) std=\(formatStat(stepStats.std))"
+                "[GenerationDiagnostics] step=\(stepIdx + 1)/\(schedule.count) t=\(formatStat(Float(timestepVal))) latent_mean=\(formatStat(stepStats.mean)) latent_std=\(formatStat(stepStats.std)) vtDiff_mean=\(formatStat(vtStats.mean)) vtDiff_std=\(formatStat(vtStats.std))"
             )
             #endif
             let frac = Double(stepIdx + 1) / Double(schedule.count)
@@ -170,7 +178,47 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             throw ContractGenerationPipelineError.invalidLatentShape(decodeLatent.shape)
         }
         #if DEBUG
-        debugPrint("[GenerationDiagnostics] decode_latent shape=\(decodeLatent.shape)")
+        if decodeLatent.ndim == 3 {
+            MLX.eval(decodeLatent) // Force evaluation for memory safety
+            let flatX = decodeLatent.asArray(Float.self)
+            let b = decodeLatent.dim(0)
+            let len = decodeLatent.dim(1)
+            let c = decodeLatent.dim(2)
+            if b == 1 && c == 64 && len > 0 {
+                var lSum: Float = 0
+                var rSum: Float = 0
+                for i in 0..<len {
+                    for j in 0..<32 { lSum += flatX[i * 64 + j] }
+                    for j in 32..<64 { rSum += flatX[i * 64 + j] }
+                }
+                let lMean = lSum / Float(len * 32)
+                let rMean = rSum / Float(len * 32)
+                
+                var num: Float = 0
+                var lDenom: Float = 0
+                var rDenom: Float = 0
+                
+                for i in 0..<len {
+                    for j in 0..<32 {
+                        let lVal = flatX[i * 64 + j]
+                        let rVal = flatX[i * 64 + j + 32]
+                        let lDiff = lVal - lMean
+                        let rDiff = rVal - rMean
+                        num += lDiff * rDiff
+                        lDenom += lDiff * lDiff
+                        rDenom += rDiff * rDiff
+                    }
+                }
+                let corr = num / sqrt(lDenom * rDenom)
+                debugPrint("[GenerationDiagnostics] decode_latent shape=\(decodeLatent.shape) L/R correlation=\(String(format: "%.6f", corr))")
+            }
+        }
+        do {
+            try MLX.save(array: decodeLatent, url: URL(fileURLWithPath: "/tmp/swift_latents.npy"))
+            print("[DEBUG] Wrote swift_latents.npy correctly")
+        } catch {
+            print("[DEBUG] Failed to write swift_latents.npy: \(error)")
+        }
         #endif
         var audio = decoder.decode(latent: decodeLatent)
         guard audio.ndim == 2 || audio.ndim == 3 else {
@@ -381,15 +429,34 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         guard shape.count >= 2 else { return [] }
         let b = shape[0]
         let channels = shape.count > 2 ? shape[2] : 1
-        let samplesPerBatch = shape.count > 2 ? (shape[1] * shape[2]) : shape[1]
+        let samplesPerBatch = shape.count > 2 ? shape[1] : shape[1]
+        
         var result: [[String: Any]] = []
-        let floats = audio.asArray(Float.self)
-        let total = b * samplesPerBatch
-        guard floats.count >= total else { return [] }
+        
         for i in 0..<b {
-            let start = i * samplesPerBatch
-            let end = start + samplesPerBatch
-            let slice = Array(floats[start..<end])
+            let bIndex = i..<(i + 1)
+            let tIndex = 0..<samplesPerBatch
+            
+            let slice: [Float]
+            if channels == 2 {
+                let leftNode = audio[bIndex, tIndex, 0..<1].squeezed().contiguous()
+                let rightNode = audio[bIndex, tIndex, 1..<2].squeezed().contiguous()
+                MLX.eval(leftNode, rightNode)
+                let leftChannel = leftNode.asArray(Float.self)
+                let rightChannel = rightNode.asArray(Float.self)
+                
+                var interleaved = [Float](repeating: 0, count: samplesPerBatch * 2)
+                for f in 0..<samplesPerBatch {
+                    interleaved[f * 2] = leftChannel[f]
+                    interleaved[f * 2 + 1] = rightChannel[f]
+                }
+                slice = interleaved
+            } else {
+                let monoNode = audio[bIndex, tIndex].squeezed().contiguous()
+                MLX.eval(monoNode)
+                slice = monoNode.asArray(Float.self)
+            }
+            
             #if DEBUG
             if channels == 2 && slice.count >= 4 {
                 var leftInterleaved: [Float] = []

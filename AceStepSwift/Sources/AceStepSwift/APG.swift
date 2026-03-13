@@ -21,18 +21,15 @@ public func apgForward(
     predUncond: MLXArray,
     guidanceScale: Float,
     momentumState: inout [String: MLXArray]?,
-    momentum: Float = -0.75,
     normThreshold: Float = 2.5
 ) -> MLXArray {
     let projAxis = 1
     var diff = predCond - predUncond
     if var state = momentumState {
-        // PyTorch: running_average = momentum * running_average + update_value
-        let running = state["running"] ?? MLXArray.zeros(diff.shape)
-        let updated = running * momentum + diff
-        state["running"] = updated
+        let running = state["running", default: MLXArray(0.0)]
+        diff = diff + running
+        state["running"] = diff
         momentumState = state
-        diff = updated
     }
     if normThreshold > 0 {
         let diffSq = (diff * diff).sum(axis: projAxis, keepDims: true)

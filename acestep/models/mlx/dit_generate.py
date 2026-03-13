@@ -211,6 +211,14 @@ def mlx_generate_diffusion(
         key = mx.random.key(int(seed))
         noise = mx.random.normal((bsz, T, C), key=key)
 
+    import os
+    np.save(os.path.abspath("mlx_initial_noise.npy"), np.array(noise))
+    
+    print(f"[Python-MLX] initial_noise: mean={np.array(noise).mean():.8f} std={np.array(noise).std():.8f}")
+    print(f"[Python-MLX] enc_hs: mean={np.array(enc_hs).mean():.8f} std={np.array(enc_hs).std():.8f}")
+    print(f"[Python-MLX] ctx: mean={np.array(ctx).mean():.8f} std={np.array(ctx).std():.8f}")
+
+
     # ---- Timestep schedule ----
     t_schedule_list = get_timestep_schedule(shift, timesteps, infer_steps=infer_steps)
     num_steps = len(t_schedule_list)
@@ -272,6 +280,9 @@ def mlx_generate_diffusion(
             )
 
         mx.eval(vt)
+        
+        vt_np = np.array(vt)
+        print(f"[Python-MLX] predictVelocity t={current_t:.4f} mean={vt_np.mean():.8f} shape={list(enc_hs.shape)}")
 
         # Apply CFG guidance
         if do_cfg:

@@ -120,7 +120,22 @@ class GenerateMusicDecodeMixin:
         with torch.inference_mode():
             with self._load_model_context("vae"):
                 pred_latents_cpu = pred_latents.detach().cpu()
+                
+                # Check Pearson Correlation of L and R latents!
+                if pred_latents_cpu.ndim == 3 and pred_latents_cpu.shape[2] == 64:
+                    L_latent = pred_latents_cpu[0, :, 0:32].flatten()
+                    R_latent = pred_latents_cpu[0, :, 32:64].flatten()
+                    if L_latent.shape[0] > 0 and R_latent.shape[0] > 0:
+                        import numpy as np
+                        corr = np.corrcoef(L_latent.numpy(), R_latent.numpy())[0, 1]
+                        print(f"!!! LATENT PRE-VAE (PYTORCH) !!! mean={pred_latents_cpu.mean().item():.6f} std={pred_latents_cpu.std().item():.6f} peak={pred_latents_cpu.abs().max().item():.6f} correlation={corr:.6f}")
+                
                 pred_latents_for_decode = pred_latents.transpose(1, 2).contiguous().to(self.vae.dtype)
+                
+                # --- EXPORT PYTORCH LATENTS ---
+                import numpy as np
+                np.save("/tmp/python_latents.npy", pred_latents_cpu.numpy())
+                
                 del pred_latents
                 self._empty_cache()
 
@@ -129,7 +144,8 @@ class GenerateMusicDecodeMixin:
                     f"allocated={self._memory_allocated()/1024**3:.2f}GB, "
                     f"max={self._max_memory_allocated()/1024**3:.2f}GB"
                 )
-                using_mlx_vae = self.use_mlx_vae and self.mlx_vae is not None
+                self.use_mlx_vae = False
+                using_mlx_vae = False # Forcing PyTorch VAE
                 vae_cpu = False
                 vae_device = None
                 if not using_mlx_vae:

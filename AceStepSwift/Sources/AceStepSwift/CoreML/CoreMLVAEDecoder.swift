@@ -70,7 +70,7 @@ public final class CoreMLVAEDecoder: VAEDecoder {
             }
             
             // If output is [1, 2, L], we want [1, L, 2] usually for audio players
-            return mlxWav.transposed(axes: [0, 2, 1])
+            return mlxWav.transposed(axes: [0, 2, 1]).contiguous()
             
         } catch {
             print("[CoreMLVAEDecoder] Prediction failed: \(error)")

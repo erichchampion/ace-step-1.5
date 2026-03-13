@@ -1921,7 +1921,9 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
         time_costs["encoder_time_cost"] = end_time - start_time
         start_time = end_time
         
+        import os
         noise = self.prepare_noise(context_latents, seed)
+        torch.save(noise.detach().cpu(), os.path.abspath("pytorch_initial_noise_turbo.pt"))
         bsz, device, dtype = context_latents.shape[0], context_latents.device, context_latents.dtype
         past_key_values = EncoderDecoderCache(DynamicCache(), DynamicCache())
         
@@ -1977,6 +1979,8 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
                 
             vt = decoder_outputs[0]
             past_key_values = decoder_outputs[1]
+            
+            print(f"[Python] predictVelocity t={t_curr_tensor[0].item():.4f} mean={vt.mean().item():.8f} shape={list(encoder_hidden_states.shape)}")
             
             # On final step, directly compute x0 from noise
             if step_idx == num_steps - 1:

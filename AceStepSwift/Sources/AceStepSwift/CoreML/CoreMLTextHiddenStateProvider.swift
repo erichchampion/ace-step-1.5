@@ -63,9 +63,10 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
         
         let actualLength = tokenIDs.count
         
-        // Pad to exactly maxLength to avoid Core ML dynamic shape broadcasting bugs
-        if tokenIDs.count < maxLength {
-            tokenIDs.append(contentsOf: Array(repeating: 0, count: maxLength - tokenIDs.count))
+        // Pad to a minimum of 16 to satisfy CoreML RangeDim(16, 4096) tracing boundaries without collapsing standard deviation
+        let minLength = max(16, tokenIDs.count)
+        if tokenIDs.count < minLength {
+            tokenIDs.append(contentsOf: Array(repeating: 0, count: minLength - tokenIDs.count))
         }
         
         let seqLen = tokenIDs.count
