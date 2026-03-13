@@ -112,7 +112,8 @@ public func loadSilenceLatent(from url: URL) throws -> MLXArray? {
     let path = url.path
     guard FileManager.default.fileExists(atPath: path) else { return nil }
     let flat = try loadArrays(url: url)
-    guard let latent = flat["latent"] else { return nil }
+    // Try multiple key names: "latent" (old format), "data" (standalone export), "silenceVariant" (CoreML checkpoint)
+    guard let latent = flat["latent"] ?? flat["data"] ?? flat["silenceVariant"] else { return nil }
     guard latent.ndim == 3, latent.dim(0) >= 1 else { return nil }
     
     // Auto-detect and transpose: [1, C, T] -> [1, T, C]
