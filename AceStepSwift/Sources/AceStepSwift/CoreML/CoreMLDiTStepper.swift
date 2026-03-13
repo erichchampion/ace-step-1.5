@@ -62,6 +62,17 @@ public final class CoreMLDiTStepper: DiffusionStepper {
             let posShaped = MLShapedArray<Int32>(scalars: positionsData, shape: [batch, downSeq])
             let cacheShaped = MLShapedArray<Int32>(scalars: positionsData, shape: [downSeq])
             
+            // Build sliding window mask [1, 1, downSeq, downSeq]
+            // |i-j| <= 128 → 0.0 (attend), else -65500.0 (masked)
+            let slidingWindow = 128
+            var swMaskData = [Float](repeating: 0, count: downSeq * downSeq)
+            for i in 0..<downSeq {
+                for j in 0..<downSeq {
+                    swMaskData[i * downSeq + j] = abs(i - j) <= slidingWindow ? 0.0 : -65500.0
+                }
+            }
+            let swMaskShaped = MLShapedArray<Float>(scalars: swMaskData, shape: [1, 1, downSeq, downSeq])
+            
             let inputProvider = try MLDictionaryFeatureProvider(dictionary: [
                 "hidden_states": MLMultiArray(latentShaped),
                 "timestep": MLMultiArray(tShaped),
@@ -71,7 +82,8 @@ public final class CoreMLDiTStepper: DiffusionStepper {
                 "encoder_attention_mask": MLMultiArray(encMaskShaped),
                 "context_latents": MLMultiArray(ctxShaped),
                 "position_ids": MLMultiArray(posShaped),
-                "cache_position": MLMultiArray(cacheShaped)
+                "cache_position": MLMultiArray(cacheShaped),
+                "sliding_window_mask": MLMultiArray(swMaskShaped)
             ])
             
             let output = try model.prediction(from: inputProvider)

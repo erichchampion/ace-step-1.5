@@ -240,12 +240,20 @@ def main():
                     import sys
                     acestep_module = sys.modules[acestep_module_name]
                     original_create_4d_mask = acestep_module.create_4d_mask
+
+                    # Mutable closure dict to pass sliding window mask from wrapper to create_4d_mask
+                    _sliding_mask_state = {}
+
                     def patched_create_4d_mask(seq_len, dtype, device, attention_mask=None, sliding_window=None, is_sliding_window=False, is_causal=True, mask_len=None):
                         if mask_len is None:
                             mask_len = seq_len
                             
-                        # If simple unmasked bidirectional attention, just expand the padding mask!
-                        if not is_causal:
+                        # If simple unmasked bidirectional attention WITHOUT sliding window,
+                        # just return zeros (all positions attend to all positions).
+                        # CRITICAL: Do NOT shortcut when is_sliding_window=True — the sliding
+                        # window mask restricts attention to |i-j| <= window positions, which
+                        # is essential for correct output at long sequences (e.g., 30s audio).
+                        if not is_causal and not is_sliding_window:
                             if attention_mask is not None:
                                 p_mask = attention_mask.unsqueeze(1).unsqueeze(2).to(torch.bool)
                                 # p_mask is [B, 1, 1, mask_len]
@@ -255,7 +263,12 @@ def main():
                             else:
                                 return torch.zeros((1, 1, 1, 1), dtype=dtype, device=device)
                         
-                        # Otherwise fall back to the original function (but with static int casts just in case it's traceable)
+                        # Sliding window: use the pre-computed mask passed from the wrapper.
+                        # This avoids ALL dynamic ops (arange, triu, cumsum) in the trace graph.
+                        if is_sliding_window and not is_causal and 'mask' in _sliding_mask_state:
+                            return _sliding_mask_state['mask']
+                        
+                        # For causal or other cases, fall back to the original function
                         return original_create_4d_mask(int(seq_len), dtype, device, attention_mask, sliding_window, is_sliding_window, is_causal, None if mask_len is None else int(mask_len))
                     
                     acestep_module.create_4d_mask = patched_create_4d_mask
@@ -266,7 +279,10 @@ def main():
                             super().__init__()
                             self.m = m
                             self.is_turbo = getattr(m.config, 'is_turbo', False)
-                        def forward(self, hidden_states, timestep, timestep_r, attention_mask, encoder_hidden_states, encoder_attention_mask, context_latents, position_ids, cache_position):
+                        def forward(self, hidden_states, timestep, timestep_r, attention_mask, encoder_hidden_states, encoder_attention_mask, context_latents, position_ids, cache_position, sliding_window_mask):
+                            # Store the pre-computed sliding window mask in the closure
+                            # so patched_create_4d_mask can read it for sliding attention layers
+                            _sliding_mask_state['mask'] = sliding_window_mask
                             kwargs = {
                                 'hidden_states': hidden_states, 'timestep': timestep, 'timestep_r': timestep_r,
                                 'attention_mask': attention_mask, 'encoder_hidden_states': encoder_hidden_states,
@@ -290,14 +306,29 @@ def main():
                     wrapped_model = AcestepWrapper(model).eval()
                     if "STATIC_SEQ_LEN" in os.environ:
                         del os.environ["STATIC_SEQ_LEN"]
+                    
+                    # Pre-compute sliding window mask for tracing (downseq=64 for seq=128)
+                    trace_downseq = 64
+                    sw = getattr(model.config, 'sliding_window', 128) or 128
+                    sw_mask_np = np.zeros((1, 1, trace_downseq, trace_downseq), dtype=np.float32)
+                    for i in range(trace_downseq):
+                        for j in range(trace_downseq):
+                            if abs(i - j) <= sw:
+                                sw_mask_np[0, 0, i, j] = 0.0
+                            else:
+                                sw_mask_np[0, 0, i, j] = -65500.0
+                    sw_mask_trace = torch.from_numpy(sw_mask_np)
+                    
                     example_input = (
                         torch.randn((1, 128, 64), dtype=torch.float32), torch.randn((1,), dtype=torch.float32),
                         torch.randn((1,), dtype=torch.float32), torch.ones((1, 128), dtype=torch.float32),
                         torch.randn((1, 100, 2048), dtype=torch.float32), torch.randn((1, 100), dtype=torch.float32),
                         torch.randn((1, 128, 128), dtype=torch.float32), 
                         torch.arange(64, dtype=torch.int64).unsqueeze(0),
-                        torch.arange(64, dtype=torch.int64)
+                        torch.arange(64, dtype=torch.int64),
+                        sw_mask_trace
                     )
+                    # Note: downseq = seq/2 due to patch_size=2
                     inputs_schema = [
                         ct.TensorType(name="hidden_states", shape=(1, ct.RangeDim(16, 32768, default=128), 64), dtype=np.float32),
                         ct.TensorType(name="timestep", shape=(1,), dtype=np.float32),
@@ -307,7 +338,8 @@ def main():
                         ct.TensorType(name="encoder_attention_mask", shape=(1, ct.RangeDim(1, 4096, default=100)), dtype=np.float32),
                         ct.TensorType(name="context_latents", shape=(1, ct.RangeDim(16, 32768, default=128), 128), dtype=np.float32),
                         ct.TensorType(name="position_ids", shape=(1, ct.RangeDim(8, 16384, default=64)), dtype=np.int32),
-                        ct.TensorType(name="cache_position", shape=(ct.RangeDim(8, 16384, default=64),), dtype=np.int32)
+                        ct.TensorType(name="cache_position", shape=(ct.RangeDim(8, 16384, default=64),), dtype=np.int32),
+                        ct.TensorType(name="sliding_window_mask", shape=(1, 1, ct.RangeDim(8, 16384, default=64), ct.RangeDim(8, 16384, default=64)), dtype=np.float32),
                     ]
                     outputs_schema = [ct.TensorType(name="velocity")]
                 else:
