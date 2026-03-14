@@ -15,11 +15,13 @@ public enum CoreMLTextHiddenStateProviderError: Error {
 public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
     private let model: MLModel
     private let encodeTokens: (String) -> [Int]
+    private let embeddingLoader: LyricTokenEmbeddingLoader?
     private let lock = NSLock()
     
-    private init(model: MLModel, encodeTokens: @escaping (String) -> [Int]) {
+    private init(model: MLModel, encodeTokens: @escaping (String) -> [Int], embeddingLoader: LyricTokenEmbeddingLoader? = nil) {
         self.model = model
         self.encodeTokens = encodeTokens
+        self.embeddingLoader = embeddingLoader
     }
     
     public static func load(from directory: URL) async throws -> CoreMLTextHiddenStateProvider {
@@ -44,9 +46,30 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
         
         let tokenizer = try await AutoTokenizer.from(modelFolder: directory)
         
+        // Load token embedding matrix for lyric encoding (embed_tokens direct lookup).
+        // Python uses text_encoder.embed_tokens(lyric_token_ids) which returns raw embeddings (std~0.03),
+        // NOT full hidden states (std~3.2). The lyric encoder expects these raw embeddings.
+        var embLoader: LyricTokenEmbeddingLoader? = nil
+        let candidateFiles = ["embed_tokens.safetensors", "model.safetensors", "encoder.safetensors"]
+        for candidate in candidateFiles {
+            let url = directory.appendingPathComponent(candidate)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            do {
+                embLoader = try LyricTokenEmbeddingLoader.load(from: url)
+                print("[CoreMLTextHiddenStateProvider] Loaded embedding matrix from \(candidate): vocab=\(embLoader!.vocabSize), hidden=\(embLoader!.hiddenSize)")
+                break
+            } catch {
+                print("[CoreMLTextHiddenStateProvider] \(candidate): no embed_tokens key, trying next...")
+            }
+        }
+        if embLoader == nil {
+            print("[CoreMLTextHiddenStateProvider] Warning: no embedding matrix found. Lyric encoding will use full hidden states (degraded quality).")
+        }
+        
         return CoreMLTextHiddenStateProvider(
             model: model,
-            encodeTokens: { tokenizer.encode(text: $0, addSpecialTokens: true) }
+            encodeTokens: { tokenizer.encode(text: $0, addSpecialTokens: true) },
+            embeddingLoader: embLoader
         )
     }
     
@@ -134,8 +157,21 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
     }
     
     public func encodeTokenEmbeddings(text: String, maxLength: Int) throws -> (embeddings: MLXArray, attentionMask: MLXArray) {
-        // Typically should load from raw embedding layer. We'll fallback to full forward for simplicity in phase 1,
-        // or just return the hidden states if that's what the wrapper does.
+        // Python uses text_encoder.embed_tokens(lyric_token_ids) which returns raw token
+        // embeddings (std~0.03), NOT full transformer hidden states (std~3.2).
+        // The lyric encoder expects these raw embeddings as input.
+        if let loader = embeddingLoader {
+            var tokenIDs = encodeTokens(text)
+            if tokenIDs.isEmpty { tokenIDs = [0] }
+            if tokenIDs.count > maxLength { tokenIDs = Array(tokenIDs.prefix(maxLength)) }
+            let actualLength = tokenIDs.count
+            let embeddings = loader.embed(tokenIDs: tokenIDs)
+            var maskFloats = [Float](repeating: 0, count: actualLength)
+            for i in 0..<actualLength { maskFloats[i] = 1.0 }
+            let attentionMask = MLXArray(maskFloats, [1, actualLength])
+            return (embeddings: embeddings, attentionMask: attentionMask)
+        }
+        // Fallback: use full hidden states (degraded quality)
         let result = try encodeHiddenStates(text: text, maxLength: maxLength)
         return (embeddings: result.hiddenStates, attentionMask: result.attentionMask)
     }

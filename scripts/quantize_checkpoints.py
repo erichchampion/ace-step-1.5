@@ -399,6 +399,50 @@ def main():
             if 'model' in locals() and hasattr(model, 'null_condition_emb'):
                 null_emb = model.null_condition_emb.detach().cpu()
             
+            # Extract encoder.* weights for ConditionEncoder (lyric_encoder, timbre_encoder, text_projector)
+            # Without these weights, the ConditionEncoder runs with random initialization → garbled audio.
+            encoder_tensors = None
+            if 'model' in locals() and hasattr(model, 'encoder'):
+                encoder_tensors = {}
+                for k, v in model.state_dict().items():
+                    if k.startswith('encoder.'):
+                        encoder_tensors[k] = v.detach().cpu()
+                if encoder_tensors:
+                    log(f"  Extracted {len(encoder_tensors)} encoder weight keys for ConditionEncoder deployment.")
+                else:
+                    encoder_tensors = None
+            
+            # Collect tokenizer files for text encoder models
+            is_text_encoder_model = "embedding" in item.name.lower() or "qwen" in item.name.lower()
+            tokenizer_files_to_copy = []
+            if is_text_encoder_model:
+                for tok_file in ["tokenizer.json", "tokenizer_config.json"]:
+                    src = item / tok_file
+                    if src.exists():
+                        tokenizer_files_to_copy.append(src)
+                if tokenizer_files_to_copy:
+                    log(f"  Found {len(tokenizer_files_to_copy)} tokenizer file(s) to deploy with text encoder.")
+
+            # Extract embed_tokens.weight for text encoder models (used for lyric embedding direct lookup).
+            # Without this, the lyric encoder receives full transformer hidden states (std~3.2)
+            # instead of raw token embeddings (std~0.03), causing a 105x magnitude error.
+            embed_tokens_tensor = None
+            if is_text_encoder_model and 'model' in locals():
+                embed_layer = getattr(model, 'embed_tokens', None)
+                if embed_layer is None and hasattr(model, 'model'):
+                    embed_layer = getattr(model.model, 'embed_tokens', None)
+                if embed_layer is not None and hasattr(embed_layer, 'weight'):
+                    embed_tokens_tensor = embed_layer.weight.detach().cpu().to(torch.float16)
+                    log(f"  Extracted embed_tokens.weight: shape={list(embed_tokens_tensor.shape)}")
+                else:
+                    log("  Warning: Could not find embed_tokens.weight in text encoder model.")
+
+            # Extract silence_latent for DiT models (used for context latents in text2music)
+            silence_latent_tensor = None
+            if 'model' in locals() and hasattr(model, 'silence_latent'):
+                silence_latent_tensor = model.silence_latent.detach().cpu()
+                log(f"  Extracted silence_latent: shape={list(silence_latent_tensor.shape)}")
+            
             # Free memory
             if 'model' in locals(): del model
             if 'wrapped_model' in locals(): del wrapped_model
@@ -435,6 +479,25 @@ def main():
                         null_path = output_path / "null_condition_embedding.safetensors"
                         safetensors.torch.save_file({"null_condition_emb": null_emb}, null_path)
                         log(f"  [{bits}-bit] Saved null_condition_embedding.safetensors to '{output_path}'.")
+                    if encoder_tensors is not None:
+                        import safetensors.torch
+                        enc_path = output_path / "encoder.safetensors"
+                        safetensors.torch.save_file(encoder_tensors, str(enc_path))
+                        log(f"  [{bits}-bit] Saved encoder.safetensors ({len(encoder_tensors)} keys) to '{output_path}'.")
+                    for tok_src in tokenizer_files_to_copy:
+                        tok_dst = output_path / tok_src.name
+                        shutil.copy(tok_src, tok_dst)
+                        log(f"  [{bits}-bit] Copied {tok_src.name} to '{output_path}'.")
+                    if embed_tokens_tensor is not None:
+                        import safetensors.torch
+                        et_path = output_path / "embed_tokens.safetensors"
+                        safetensors.torch.save_file({"embed_tokens.weight": embed_tokens_tensor}, str(et_path))
+                        log(f"  [{bits}-bit] Saved embed_tokens.safetensors to '{output_path}'.")
+                    if silence_latent_tensor is not None:
+                        import safetensors.torch
+                        sl_path = output_path / "silence_latent.safetensors"
+                        safetensors.torch.save_file({"latent": silence_latent_tensor}, str(sl_path))
+                        log(f"  [{bits}-bit] Saved silence_latent.safetensors to '{output_path}'.")
                 except Exception as e:
                     log(f"  [{bits}-bit] Error during compression: {e}")
                 finally:

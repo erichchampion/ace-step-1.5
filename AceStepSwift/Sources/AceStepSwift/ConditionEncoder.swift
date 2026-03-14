@@ -97,6 +97,7 @@ public class ConditionEncoder: Module {
             }
             let lyricOut = lyricEncoder.call(inputsEmbeds: lyricHiddenStates!, attentionMask: lyricAttentionMask!)
             let (timbreOut, timbreMask) = timbreEncoder.call(referAudioPacked: referAudioPacked!, referAudioOrderMask: referAudioOrderMask!)
+
             return packSequences(hidden1: lyricOut, hidden2: timbreOut, mask1: lyricAttentionMask!, mask2: timbreMask)
         }()
 

@@ -36,5 +36,14 @@ let package = Package(
             ],
             path: "Tests/AceStepSwiftTests"
         ),
+        .executableTarget(
+            name: "ConditioningComparisonRunner",
+            dependencies: [
+                "AceStepSwift",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+            ],
+            path: "Sources/ConditioningComparisonRunner"
+        ),
     ]
 )

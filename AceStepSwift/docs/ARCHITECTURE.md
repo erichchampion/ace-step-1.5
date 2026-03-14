@@ -272,6 +272,55 @@ The standard native evaluation suite requires validation of every bit-depth mode
 3. The Swift testing context executes individual evaluations (`CoreMLGenerationTests`), loads the Core ML environments, extracts full length (e.g. 30-second) sequences to intermediate `.wav` targets using native `AVAudioFile` blocks, and streams output shapes.
 4. Finally, the outputs are mathematically profiled against the PyTorch `python_out.wav` using `scripts/validate_audio.py` to ensure their dynamic variance structures execute consistently through local optimizations instead of falling back to empty static arrays.
 
+### 6.4 Required Ancillary Files in `.mlpackage` Bundles
+
+CoreML `.mlpackage` bundles contain the traced neural network (under `Data/`), but the Swift runtime also needs several ancillary weight and configuration files that live **alongside** `Data/` in the mlpackage root. These are extracted from the source PyTorch checkpoints during quantization by `quantize_checkpoints.py` and **must** be present for correct generation.
+
+> [!CAUTION]
+> If `encoder.safetensors` is missing from the DiT package, the `ConditionEncoder` silently falls back to random weights, producing `enc(std≈1.0)` instead of `enc(std≈3.0)`. This causes garbled audio that is difficult to diagnose because the pipeline runs without errors.
+
+#### DiT package (`acestep-v15-turbo-*.mlpackage`)
+
+| File | Source | Purpose | Consequence if Missing |
+|------|--------|---------|----------------------|
+| `encoder.safetensors` | `model.state_dict()` keys starting with `encoder.*` (140 keys, ~1.16 GB) | ConditionEncoder weights: `textProjector`, `lyricEncoder`, `timbreEncoder` | **Garbled audio** — all three sub-encoders run with random weights |
+| `null_condition_embedding.safetensors` | `model.null_condition_emb` | Null/unconditional embedding for CFG guidance | CFG produces incorrect unconditional predictions |
+| `silence_latent.safetensors` | `model.silence_latent` (key `"latent"`) | Silence latent tiled for `context_latents` in text2music (no reference audio) | Context latents default to zeros; degraded audio quality |
+
+**Weight loading flow:** `CadenzaEngineHolder` calls `loadDiTParametersForEncoder(from:)` which strips the `encoder.` prefix from each key, then `conditionEncoder.update(parameters:)` maps them to the Swift `ConditionEncoder` module tree (lyric_encoder, timbre_encoder, text_projector sub-modules).
+
+#### Text encoder package (`Qwen3-Embedding-*.mlpackage`)
+
+| File | Source | Purpose | Consequence if Missing |
+|------|--------|---------|----------------------|
+| `tokenizer.json` | `checkpoints/Qwen3-Embedding-0.6B/tokenizer.json` (11.4 MB) | BPE tokenizer vocabulary and merge rules for `AutoTokenizer` | Wrong tokenization — different token counts vs Python reference |
+| `tokenizer_config.json` | Same source directory | Tokenizer configuration (special tokens, model type) | `AutoTokenizer.from(modelFolder:)` may fail or use wrong defaults |
+| `embed_tokens.safetensors` | `model.embed_tokens.weight` or `model.model.embed_tokens.weight` (float16) | Direct embedding lookup for lyric encoding | Lyric encoder receives full hidden states (std≈3.2) instead of raw embeddings (std≈0.03) — 105× magnitude error |
+
+**Tokenizer note:** The `tokenizer.json` must come from the **source** Hugging Face checkpoint directory, not from a different export. Different tokenizer files produce different token counts for the same text, which shifts the conditioning statistics and degrades audio quality.
+
+#### VAE package (`vae-*.mlpackage`)
+
+No ancillary files required — the traced CoreML model is self-contained.
+
+#### Verifying a deployment
+
+To verify that all ancillary files are present and weights load correctly, check the CLI diagnostic output for these indicators:
+
+```
+# ✅ Correct — encoder weights loaded
+[ConditioningDiagnostics] enc(std=3.0..., shape=[1, 70, 2048])
+
+# ❌ Incorrect — random weights (missing encoder.safetensors)
+[ConditioningDiagnostics] enc(std=1.6..., shape=[1, 70, 2048])
+
+# ✅ Correct — embedding matrix loaded
+[CoreMLTextHiddenStateProvider] Loaded embedding matrix from embed_tokens.safetensors: vocab=151669, hidden=1024
+
+# ❌ Incorrect — no embedding matrix
+[CoreMLTextHiddenStateProvider] Warning: no embedding matrix found. Lyric encoding will use full hidden states (degraded quality).
+```
+
 ---
 
 ## 7. Review Findings and Possible Bugs
