@@ -5,7 +5,8 @@ import MLX
 final class ContiguityTests: XCTestCase {
     func testArrayContiguity() {
         // [2, 3] layout
-        let a = MLXArray([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+        let values: [Float] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        let a = MLXArray(values, [2, 3])
         // Transpose to [3, 2]
         let b = a.transposed(axes: [1, 0])
         let c = b.contiguous()
