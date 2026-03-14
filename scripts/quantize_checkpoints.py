@@ -437,11 +437,29 @@ def main():
                 else:
                     log("  Warning: Could not find embed_tokens.weight in text encoder model.")
 
-            # Extract silence_latent for DiT models (used for context latents in text2music)
+            # Extract silence_latent for DiT models (used for context latents in text2music).
+            # The silence latent is stored as a standalone file (silence_latent.pt or
+            # silence_latent.safetensors), NOT as a model attribute.
             silence_latent_tensor = None
-            if 'model' in locals() and hasattr(model, 'silence_latent'):
-                silence_latent_tensor = model.silence_latent.detach().cpu()
-                log(f"  Extracted silence_latent: shape={list(silence_latent_tensor.shape)}")
+            is_acestep_model = 'model' in locals() and hasattr(model, 'encoder')
+            if is_acestep_model:
+                sl_pt = item / "silence_latent.pt"
+                sl_st = item / "silence_latent.safetensors"
+                if sl_pt.exists():
+                    sl_data = torch.load(str(sl_pt), map_location="cpu", weights_only=True)
+                    if isinstance(sl_data, dict):
+                        silence_latent_tensor = sl_data.get("latent", next(iter(sl_data.values())))
+                    else:
+                        silence_latent_tensor = sl_data
+                    silence_latent_tensor = silence_latent_tensor.detach().cpu()
+                    log(f"  Extracted silence_latent from .pt: shape={list(silence_latent_tensor.shape)}")
+                elif sl_st.exists():
+                    import safetensors.torch as sft
+                    sl_dict = sft.load_file(str(sl_st))
+                    silence_latent_tensor = sl_dict.get("latent", next(iter(sl_dict.values())))
+                    log(f"  Extracted silence_latent from .safetensors: shape={list(silence_latent_tensor.shape)}")
+                else:
+                    log(f"  Warning: No silence_latent.pt or .safetensors found in {item}")
             
             # Free memory
             if 'model' in locals(): del model
