@@ -157,7 +157,6 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             )
             #if DEBUG
             let stepStats = tensorMeanStd(xt)
-            let variance = stepStats.std * stepStats.std
             let vtDiff = previousLatent - xt
             let vtStats = tensorMeanStd(vtDiff)
             debugPrint(
