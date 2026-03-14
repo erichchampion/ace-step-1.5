@@ -213,8 +213,11 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             }
         }
         do {
-            try MLX.save(array: decodeLatent, url: URL(fileURLWithPath: "/tmp/swift_latents.npy"))
-            print("[DEBUG] Wrote swift_latents.npy correctly")
+            let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSTemporaryDirectory())
+            let npyURL = supportDir.appendingPathComponent("swift_latents.npy")
+            try MLX.save(array: decodeLatent, url: npyURL)
+            print("[DEBUG] Wrote swift_latents.npy to \(npyURL.path)")
         } catch {
             print("[DEBUG] Failed to write swift_latents.npy: \(error)")
         }
