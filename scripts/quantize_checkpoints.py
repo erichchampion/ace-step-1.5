@@ -93,6 +93,62 @@ def main():
     quantized_dir = Path("quantized_checkpoints_coreml")
     quantized_dir.mkdir(exist_ok=True)
 
+    # Track validation results across all models
+    validation_failures = []
+
+    def validate_mlpackage(output_path: Path, model_name: str, log):
+        """Validate that a generated mlpackage contains all required ancillary files."""
+        name_lower = model_name.lower()
+        is_dit = "acestep" in name_lower and "lm" not in name_lower and "vae" not in model_name.lower()
+        is_vae = "vae" in name_lower
+        is_text_encoder = "embedding" in name_lower or "qwen" in name_lower
+        is_lm = "lm" in name_lower and not is_text_encoder
+
+        # CoreML model files are always required
+        required = ["Manifest.json"]
+        data_dir = output_path / "Data"
+        if not data_dir.exists():
+            log(f"  [VALIDATION FAIL] {output_path.name}: Missing Data/ directory!")
+            validation_failures.append((output_path.name, "Data/"))
+            return
+
+        if is_dit:
+            required += [
+                "encoder.safetensors",           # ConditionEncoder weights
+                "null_condition_embedding.safetensors",  # CFG null embedding
+                # silence_latent.safetensors is optional (loaded from app bundle as fallback)
+            ]
+        elif is_vae:
+            required += [
+                "encoder.safetensors",  # VAE encoder/decoder weights
+            ]
+        elif is_text_encoder:
+            required += [
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "embed_tokens.safetensors",
+            ]
+        elif is_lm:
+            required += [
+                "tokenizer.json",
+                "tokenizer_config.json",
+            ]
+
+        missing = []
+        for fname in required:
+            if not (output_path / fname).exists():
+                missing.append(fname)
+
+        if missing:
+            log(f"  [VALIDATION FAIL] {output_path.name}: Missing files: {', '.join(missing)}")
+            for fname in missing:
+                validation_failures.append((output_path.name, fname))
+        else:
+            # List all files for verification
+            all_files = sorted(f.name for f in output_path.iterdir() if f.is_file())
+            all_dirs = sorted(d.name for d in output_path.iterdir() if d.is_dir())
+            log(f"  [VALIDATION PASS] {output_path.name}: {len(all_files)} files, {len(all_dirs)} dirs: {', '.join(all_files)}")
+
     log(f"Scanning checkpoints directory for models at {checkpoints_dir}...\n")
     
     # Force transformers to never use vmap for sdpa masks during tracing
@@ -412,16 +468,23 @@ def main():
                 else:
                     encoder_tensors = None
             
-            # Collect tokenizer files for text encoder models
-            is_text_encoder_model = "embedding" in item.name.lower() or "qwen" in item.name.lower()
+            # Detect model type for ancillary file decisions
+            name_lower = item.name.lower()
+            is_text_encoder_model = "embedding" in name_lower or "qwen" in name_lower
+            is_lm_model = "lm" in name_lower and not is_text_encoder_model
+            needs_tokenizer = is_text_encoder_model or is_lm_model
+
+            # Collect tokenizer files for text encoder AND LM models
             tokenizer_files_to_copy = []
-            if is_text_encoder_model:
+            if needs_tokenizer:
                 for tok_file in ["tokenizer.json", "tokenizer_config.json"]:
                     src = item / tok_file
                     if src.exists():
                         tokenizer_files_to_copy.append(src)
                 if tokenizer_files_to_copy:
-                    log(f"  Found {len(tokenizer_files_to_copy)} tokenizer file(s) to deploy with text encoder.")
+                    log(f"  Found {len(tokenizer_files_to_copy)} tokenizer file(s) to deploy.")
+                else:
+                    log(f"  Warning: No tokenizer files found in {item} (expected for {'text encoder' if is_text_encoder_model else 'LM'})")
 
             # Extract embed_tokens.weight for text encoder models (used for lyric embedding direct lookup).
             # Without this, the lyric encoder receives full transformer hidden states (std~3.2)
@@ -516,6 +579,10 @@ def main():
                         sl_path = output_path / "silence_latent.safetensors"
                         safetensors.torch.save_file({"latent": silence_latent_tensor}, str(sl_path))
                         log(f"  [{bits}-bit] Saved silence_latent.safetensors to '{output_path}'.")
+
+                    # ─── Validate the generated mlpackage ───
+                    validate_mlpackage(output_path, item.name, log)
+
                 except Exception as e:
                     log(f"  [{bits}-bit] Error during compression: {e}")
                 finally:
@@ -531,6 +598,19 @@ def main():
         finally:
             if 'mlmodel' in locals(): del mlmodel
             gc.collect()
+
+    # ─── Final Validation Summary ───
+    log("\n" + "=" * 60)
+    if validation_failures:
+        log(f"VALIDATION SUMMARY: {len(validation_failures)} missing file(s) detected!")
+        for pkg_name, missing_file in validation_failures:
+            log(f"  ❌ {pkg_name} → {missing_file}")
+        log("=" * 60)
+        log("Some mlpackages are incomplete. Fix the issues above and re-run.")
+        sys.exit(1)
+    else:
+        log("VALIDATION SUMMARY: All generated mlpackages passed validation. ✅")
+        log("=" * 60)
 
 if __name__ == "__main__":
     main()
