@@ -311,19 +311,13 @@ def main():
                         # window mask restricts attention to |i-j| <= window positions, which
                         # is essential for correct output at long sequences (e.g., 30s audio).
                         if not is_causal and not is_sliding_window:
-                            if attention_mask is not None:
-                                # For cross-attention (mask_len != seq_len), we need the mask
-                                # to already be [B, 1, seq_len, mask_len] so that
-                                # eager_attention_forward's slice `mask[:,:,:,:kv_len]` is a no-op.
-                                # attention_mask is [B, self_seq_len]; for cross-attention the mask
-                                # dimension should span mask_len positions of the key/value sequence.
-                                # Since we're bidirectional with no sliding window, all positions attend,
-                                # so return an all-zero mask at the correct shape.
-                                p_mask_len = int(mask_len) if not isinstance(mask_len, int) else mask_len
-                                p_seq_len = int(seq_len) if not isinstance(seq_len, int) else seq_len
-                                return torch.zeros((1, 1, p_seq_len, p_mask_len), dtype=dtype, device=device)
-                            else:
-                                return torch.zeros((1, 1, 1, 1), dtype=dtype, device=device)
+                            # Bidirectional attention with no sliding window: all positions
+                            # attend to all positions, so mask is all zeros.  Return (1,1,1,1)
+                            # which broadcasts to any (B, H, Q, K) shape at runtime.
+                            # CRITICAL: Do NOT use int(seq_len)/int(mask_len) here — during
+                            # JIT tracing those calls freeze the trace-time dimensions as
+                            # constants, making the model fail at any other runtime shape.
+                            return torch.zeros((1, 1, 1, 1), dtype=dtype, device=device)
                         
                         # Sliding window: use the pre-computed mask passed from the wrapper.
                         # This avoids ALL dynamic ops (arange, triu, cumsum) in the trace graph.
