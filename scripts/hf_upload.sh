@@ -3,7 +3,19 @@
 # Upload all .mlpackage directories to HuggingFace Hub.
 # Each directory becomes a separate model repo under the ewchampion namespace.
 #
-# Usage: Run from the quantized_checkpoints_coreml/ directory.
+# Usage: ./scripts/hf_upload.sh
+
+set -euo pipefail
+
+# Resolve the project root relative to this script's location
+SCRIPT_DIR="${0:a:h}"
+PROJECT_ROOT="${SCRIPT_DIR}/.."
+PACKAGES_DIR="${PROJECT_ROOT}/quantized_checkpoints_coreml"
+
+if [[ ! -d "$PACKAGES_DIR" ]]; then
+  echo "ERROR: Packages directory not found: $PACKAGES_DIR"
+  exit 1
+fi
 
 # Increase timeout for large file uploads (5 minutes)
 export HF_HUB_HTTP_TIMEOUT=300
@@ -11,7 +23,9 @@ export HF_HUB_HTTP_TIMEOUT=300
 # HuggingFace namespace
 HF_USER="ewchampion"
 
-# Iterate over each *.mlpackage directory in the current directory
+cd "$PACKAGES_DIR"
+
+# Iterate over each *.mlpackage directory
 for mlpackage in *.mlpackage; do
     # Skip if no matches found
     [[ -d "$mlpackage" ]] || continue
@@ -41,6 +55,7 @@ for mlpackage in *.mlpackage; do
                 sleep 10
             else
                 echo "FAILED to upload $mlpackage after 3 attempts."
+                exit 1
             fi
         fi
     done
