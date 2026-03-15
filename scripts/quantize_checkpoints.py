@@ -312,11 +312,16 @@ def main():
                         # is essential for correct output at long sequences (e.g., 30s audio).
                         if not is_causal and not is_sliding_window:
                             if attention_mask is not None:
-                                p_mask = attention_mask.unsqueeze(1).unsqueeze(2).to(torch.bool)
-                                # p_mask is [B, 1, 1, mask_len]
-                                zero = torch.tensor(0.0, dtype=dtype, device=device)
-                                inf_val = torch.tensor(-65500.0, dtype=dtype, device=device)
-                                return torch.where(p_mask, zero, inf_val)
+                                # For cross-attention (mask_len != seq_len), we need the mask
+                                # to already be [B, 1, seq_len, mask_len] so that
+                                # eager_attention_forward's slice `mask[:,:,:,:kv_len]` is a no-op.
+                                # attention_mask is [B, self_seq_len]; for cross-attention the mask
+                                # dimension should span mask_len positions of the key/value sequence.
+                                # Since we're bidirectional with no sliding window, all positions attend,
+                                # so return an all-zero mask at the correct shape.
+                                p_mask_len = int(mask_len) if not isinstance(mask_len, int) else mask_len
+                                p_seq_len = int(seq_len) if not isinstance(seq_len, int) else seq_len
+                                return torch.zeros((1, 1, p_seq_len, p_mask_len), dtype=dtype, device=device)
                             else:
                                 return torch.zeros((1, 1, 1, 1), dtype=dtype, device=device)
                         
