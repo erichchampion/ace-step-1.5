@@ -46,7 +46,6 @@ VAE_REPOS=(
   "vae-coreml-6bit.mlpackage"
   "vae-coreml-8bit.mlpackage"
   "vae-coreml-16bit.mlpackage"
-  "vae-coreml-fp16.mlpackage"
 )
 VAE_REQUIRED_FILES=(
   "Manifest.json"
