@@ -93,8 +93,9 @@ def main():
     quantized_dir = Path("quantized_checkpoints_coreml")
     quantized_dir.mkdir(exist_ok=True)
 
-    # Track validation results across all models
+    # Track validation results and processing errors across all models
     validation_failures = []
+    processing_errors = []
 
     def validate_mlpackage(output_path: Path, model_name: str, log):
         """Validate that a generated mlpackage contains all required ancillary files."""
@@ -585,6 +586,7 @@ def main():
 
                 except Exception as e:
                     log(f"  [{bits}-bit] Error during compression: {e}")
+                    processing_errors.append((item.name, f"{bits}-bit", str(e)))
                 finally:
                     if 'compressed_mlmodel' in locals(): del compressed_mlmodel
                     compressed_mlmodel = None
@@ -595,21 +597,33 @@ def main():
         except Exception as e:
             log(f"  [Error] Failed to process model '{item.name}': {e}")
             traceback.print_exc()
+            processing_errors.append((item.name, "model load/convert", str(e)))
         finally:
             if 'mlmodel' in locals(): del mlmodel
             gc.collect()
 
-    # ─── Final Validation Summary ───
+    # ─── Final Summary ───
     log("\n" + "=" * 60)
+    has_failures = False
+
+    if processing_errors:
+        has_failures = True
+        log(f"PROCESSING ERRORS: {len(processing_errors)} error(s) during quantization!")
+        for model_name, stage, error_msg in processing_errors:
+            log(f"  ❌ {model_name} [{stage}]: {error_msg}")
+
     if validation_failures:
-        log(f"VALIDATION SUMMARY: {len(validation_failures)} missing file(s) detected!")
+        has_failures = True
+        log(f"VALIDATION FAILURES: {len(validation_failures)} missing file(s) detected!")
         for pkg_name, missing_file in validation_failures:
             log(f"  ❌ {pkg_name} → {missing_file}")
+
+    if has_failures:
         log("=" * 60)
-        log("Some mlpackages are incomplete. Fix the issues above and re-run.")
+        log("Quantization completed with errors. See above for details.")
         sys.exit(1)
     else:
-        log("VALIDATION SUMMARY: All generated mlpackages passed validation. ✅")
+        log("All models processed and validated successfully. ✅")
         log("=" * 60)
 
 if __name__ == "__main__":
