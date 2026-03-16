@@ -343,6 +343,10 @@ def _contains_model_weights(model_path: Path) -> bool:
         "model.safetensors.index.json",
         "pytorch_model.bin",
         "pytorch_model.bin.index.json",
+        "diffusion_pytorch_model.safetensors",
+        "diffusion_pytorch_model.safetensors.index.json",
+        "diffusion_pytorch_model.bin",
+        "diffusion_pytorch_model.bin.index.json",
     )
     if not model_path.is_dir():
         return False
@@ -808,4 +812,3 @@ Alternative using huggingface-cli:
 
 if __name__ == "__main__":
     sys.exit(main())
-

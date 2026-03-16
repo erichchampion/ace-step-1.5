@@ -121,6 +121,22 @@ class TestCheckMainModelExists(unittest.TestCase):
 
         self.assertTrue(result)
 
+    def test_returns_true_when_vae_uses_diffusers_weight_filename(self):
+        """check_main_model_exists accepts the current Diffusers-style VAE checkpoint filename."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            checkpoints_dir = Path(tmp_dir)
+            for component in self.mod.MAIN_MODEL_COMPONENTS:
+                component_dir = checkpoints_dir / component
+                component_dir.mkdir()
+                weight_filename = "model.safetensors"
+                if component == "vae":
+                    weight_filename = "diffusion_pytorch_model.safetensors"
+                (component_dir / weight_filename).write_text("weights", encoding="utf-8")
+
+            result = self.mod.check_main_model_exists(checkpoints_dir)
+
+        self.assertTrue(result)
+
 
 class TestCheckModelExists(unittest.TestCase):
     """Tests for model_downloader.check_model_exists()."""
@@ -157,4 +173,3 @@ class TestCheckModelExists(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
