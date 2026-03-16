@@ -64,6 +64,7 @@ class ConditioningTextMixin:
         vocal_languages: List[str],
         audio_cover_strength: float,
         global_captions: Optional[List[str]] = None,
+        chunk_mask_modes: Optional[List[str]] = None,
     ) -> Tuple[List[str], torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """Tokenize caption/lyric prompts and optional non-cover branch prompts."""
         actual_captions, actual_languages = self._extract_caption_and_language(parsed_metas, captions, vocal_languages)
@@ -105,13 +106,12 @@ class ConditioningTextMixin:
                 global_cap = (global_captions[i] if global_captions and i < len(global_captions) else "") or ""
                 instr_lower = instruction.lower()
                 is_chunk_mode = "a segment" in instr_lower
+                chunk_mode_i = (chunk_mask_modes[i] if chunk_mask_modes and i < len(chunk_mask_modes) else "auto")
+                mask_control_str = "Mask Control: false" if chunk_mode_i == "auto" else "Mask Control: true"
                 if is_chunk_mode:
-                    # Chunk mode: Local only, no Global prefix
-                    actual_caption = f"Local: {local_cap}\nMask Control: true"
+                    actual_caption = f"Local: {local_cap}\n{mask_control_str}"
                 else:
-                    # Full mode: always include Global + Local (even when global_cap is empty,
-                    # the model was trained exclusively with this prefix in full-mode prompts)
-                    actual_caption = f"Global: {global_cap}\nLocal: {local_cap}\nMask Control: true"
+                    actual_caption = f"Global: {global_cap}\nLocal: {local_cap}\n{mask_control_str}"
 
             text_prompt = SFT_GEN_PROMPT.format(instruction, actual_caption, parsed_metas[i])
 
