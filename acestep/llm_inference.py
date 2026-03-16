@@ -600,7 +600,17 @@ class LLMHandler:
                     "(SDPA fallback uses .item() calls in paged-cache decode that are "
                     "incompatible with CUDA graph capture)"
                 )
-            enforce_eager_for_vllm = bool(is_rocm or is_jetson or not _has_flash_attn)
+            _has_triton = False
+            try:
+                _has_triton = importlib.util.find_spec("triton") is not None
+            except Exception:
+                pass
+            if not _has_triton:
+                logger.info(
+                    "Triton not available: disabling CUDA graph capture for nano-vllm "
+                    "(CUDA graphs require torch.compile which depends on Triton)"
+                )
+            enforce_eager_for_vllm = bool(is_rocm or is_jetson or not _has_flash_attn or not _has_triton)
 
             # Auto-detect best backend on Apple Silicon
             if backend == "mlx" or (backend == "vllm" and device == "mps"):
@@ -663,6 +673,7 @@ class LLMHandler:
                     status_msg = self._initialize_5hz_lm_vllm(
                         full_lm_model_path,
                         enforce_eager=enforce_eager_for_vllm,
+                        has_triton=_has_triton,
                     )
                     logger.info(f"5Hz LM status message: {status_msg}")
                     if status_msg.startswith("❌"):
@@ -688,7 +699,7 @@ class LLMHandler:
         except Exception as e:
             return f"❌ Error initializing 5Hz LM: {str(e)}\n\nTraceback:\n{traceback.format_exc()}", False
 
-    def _initialize_5hz_lm_vllm(self, model_path: str, enforce_eager: bool = False) -> str:
+    def _initialize_5hz_lm_vllm(self, model_path: str, enforce_eager: bool = False, has_triton: bool = True) -> str:
         """Initialize 5Hz LM model using vllm backend. When enforce_eager is True, CUDA graph
         capture is disabled (required when LoRA training may run in the same process)."""
         if not torch.cuda.is_available():
@@ -723,6 +734,18 @@ class LLMHandler:
                 self.max_model_len = 4096
 
             logger.info(f"Initializing 5Hz LM with model: {model_path}, enforce_eager: {enforce_eager}, tensor_parallel_size: 1, max_model_len: {self.max_model_len}, gpu_memory_utilization: {gpu_memory_utilization:.3f}")
+
+            # When Triton is unavailable, torch._dynamo still attempts to
+            # compile functions decorated with @torch.compile and emits
+            # verbose "WON'T CONVERT" warnings with full tracebacks.
+            # suppress_errors makes it fall back silently to eager mode,
+            # and raising the log level hides the noisy warning output.
+            if not has_triton:
+                import torch._dynamo as _dynamo
+                _dynamo.config.suppress_errors = True
+                import logging as _logging
+                _logging.getLogger("torch._dynamo").setLevel(_logging.ERROR)
+
             start_time = time.time()
             self.llm = LLM(
                 model=model_path,
