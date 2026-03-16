@@ -2266,6 +2266,11 @@ class LLMHandler:
                     lyrics=lyrics,
                     cot_text=cot_text,
                 )
+                # Consolidate fragmented VRAM after generation to prevent
+                # temporary tensor allocations from accumulating across runs
+                # and forcing subsequent generations into slower shared memory.
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 return output_text, f"✅ Generated successfully (vllm) | length={len(output_text)}"
 
             elif self.llm_backend == "mlx":
@@ -2315,6 +2320,9 @@ class LLMHandler:
                 lyrics=lyrics,
                 cot_text=cot_text,
             )
+            # Consolidate fragmented VRAM after generation (see vLLM path above).
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return output_text, f"✅ Generated successfully (pt) | length={len(output_text)}"
 
         except Exception as e:
