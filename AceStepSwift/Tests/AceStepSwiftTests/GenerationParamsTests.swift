@@ -72,4 +72,26 @@ final class GenerationParamsTests: XCTestCase {
         XCTAssertFalse(GenerationParams.isDurationValid(9.9))
         XCTAssertFalse(GenerationParams.isDurationValid(600.1))
     }
+
+    // MARK: - Cover/repaint defaults (port of Python tests)
+
+    func testCoverStrengthDefaultIsOne() {
+        let params = GenerationParams()
+        XCTAssertEqual(params.audioCoverStrength, 1.0)
+    }
+
+    func testCoverNoiseStrengthDefaultIsZero() {
+        let params = GenerationParams()
+        XCTAssertEqual(params.coverNoiseStrength, 0.0)
+    }
+
+    func testSrcAudioNilByDefault() {
+        let params = GenerationParams()
+        XCTAssertNil(params.srcAudio)
+    }
+
+    func testReferenceAudioNilByDefault() {
+        let params = GenerationParams()
+        XCTAssertNil(params.referenceAudio)
+    }
 }

@@ -115,4 +115,66 @@ final class GenerateMusicAPITests: XCTestCase {
         XCTAssertTrue(result.success, result.error ?? "no error")
         XCTAssertFalse(result.audios.isEmpty)
     }
+
+    // MARK: - Cover pipeline initialLatents regression tests
+
+    /// Regression: pipeline with zero initialLatents produces valid output (but may produce noise).
+    /// This verifies the pipeline doesn't crash when initialLatents are all zeros.
+    func testCoverPipelineWithZeroInitialLatentsProducesOutput() {
+        let latentLen = latentLengthFromDuration(durationSeconds: 10, sampleRate: AceStepConstants.defaultSampleRate)
+        let zeroLatents = MLXArray.zeros([1, latentLen, 64])
+        let pipeline = ContractGenerationPipeline(
+            stepper: FakeDiffusionStepper(),
+            decoder: FakeVAEDecoder(),
+            sampleRate: AceStepConstants.defaultSampleRate,
+            conditioningProvider: { _, _, _ in
+                DiTConditions(initialLatents: zeroLatents)
+            }
+        )
+        let result = AceStepEngine.generateMusic(
+            params: GenerationParams(
+                caption: "cover zero",
+                lyrics: "[Instrumental]",
+                duration: 10,
+                inferenceSteps: 2,
+                seed: 1
+            ),
+            config: GenerationConfig(batchSize: 1),
+            progress: nil,
+            pipeline: pipeline
+        )
+        XCTAssertTrue(result.success, result.error ?? "no error")
+        XCTAssertFalse(result.audios.isEmpty)
+    }
+
+    /// Cover with meaningful initialLatents (non-zero) should produce valid output.
+    /// Combined with testCoverPipelineWithZeroInitialLatentsProducesOutput, this validates
+    /// that the pipeline handles both cases without crashing.
+    func testCoverPipelineWithNonZeroInitialLatentsProducesOutput() {
+        let latentLen = latentLengthFromDuration(durationSeconds: 10, sampleRate: AceStepConstants.defaultSampleRate)
+        let nonZeroLatents = MLXArray(Array(repeating: Float(0.42), count: 1 * latentLen * 64))
+            .reshaped([1, latentLen, 64])
+        let pipeline = ContractGenerationPipeline(
+            stepper: FakeDiffusionStepper(),
+            decoder: FakeVAEDecoder(),
+            sampleRate: AceStepConstants.defaultSampleRate,
+            conditioningProvider: { _, _, _ in
+                DiTConditions(initialLatents: nonZeroLatents)
+            }
+        )
+        let result = AceStepEngine.generateMusic(
+            params: GenerationParams(
+                caption: "cover nonzero",
+                lyrics: "[Instrumental]",
+                duration: 10,
+                inferenceSteps: 2,
+                seed: 1
+            ),
+            config: GenerationConfig(batchSize: 1),
+            progress: nil,
+            pipeline: pipeline
+        )
+        XCTAssertTrue(result.success, result.error ?? "no error")
+        XCTAssertFalse(result.audios.isEmpty)
+    }
 }

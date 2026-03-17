@@ -1,6 +1,15 @@
 {
   "pins" : [
     {
+      "identity" : "audiokit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/erichchampion/AudioKit",
+      "state" : {
+        "branch" : "main",
+        "revision" : "ae547afa9a517b96b34ed9ee274967fabcfd94d3"
+      }
+    },
+    {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift",

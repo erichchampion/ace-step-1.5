@@ -100,8 +100,9 @@ def main():
     def validate_mlpackage(output_path: Path, model_name: str, log):
         """Validate that a generated mlpackage contains all required ancillary files."""
         name_lower = model_name.lower()
-        is_dit = "acestep" in name_lower and "lm" not in name_lower and "vae" not in model_name.lower()
-        is_vae = "vae" in name_lower
+        is_vae_encoder = "vae_encoder" in name_lower
+        is_dit = "acestep" in name_lower and "lm" not in name_lower and "vae" not in name_lower
+        is_vae = "vae" in name_lower and not is_vae_encoder
         is_text_encoder = "embedding" in name_lower or "qwen" in name_lower
         is_lm = "lm" in name_lower and not is_text_encoder
 
@@ -123,6 +124,8 @@ def main():
             required += [
                 "encoder.safetensors",  # VAE encoder/decoder weights
             ]
+        elif is_vae_encoder:
+            pass  # VAE encoder CoreML model only needs Manifest.json + Data/
         elif is_text_encoder:
             required += [
                 "tokenizer.json",
@@ -235,19 +238,41 @@ def main():
                     
             log("  Loading PyTorch model into memory (this may take a while)...")
             
-            if item.name == "vae":
+            if item.name == "vae" or item.name == "vae_encoder":
                 from diffusers import AutoencoderOobleck
                 from torch.nn.utils.parametrize import remove_parametrizations, is_parametrized
-                model = AutoencoderOobleck.from_pretrained(str(item), torch_dtype=torch.float32)
+
+                # Both vae and vae_encoder load from checkpoints/vae
+                vae_source_dir = item if item.name == "vae" else (checkpoints_dir / "vae")
+                if not vae_source_dir.exists():
+                    log(f"  [Error] VAE source directory not found: {vae_source_dir}")
+                    continue
+                model = AutoencoderOobleck.from_pretrained(str(vae_source_dir), torch_dtype=torch.float32)
                 model.eval()
-                
-                class VAEWrapper(torch.nn.Module):
-                    def __init__(self, m):
-                        super().__init__()
-                        self.m = m
-                    def forward(self, latents):
-                        return self.m.decoder(latents)
-                wrapped_model = VAEWrapper(model).eval()
+
+                is_encoder_export = (item.name == "vae_encoder")
+
+                if is_encoder_export:
+                    # VAE Encoder: audio [1, 2, T] → latent_mean [1, 64, T']
+                    class VAEEncoderWrapper(torch.nn.Module):
+                        def __init__(self, m):
+                            super().__init__()
+                            self.m = m
+                        def forward(self, audio):
+                            # encoder returns [B, 128, T'] (mean + log_scale concatenated)
+                            h = self.m.encoder(audio)
+                            # Split to get mean (first 64 channels)
+                            return h[:, :64, :]
+                    wrapped_model = VAEEncoderWrapper(model).eval()
+                else:
+                    # VAE Decoder: latents [1, 64, T] → audio [1, 2, T']
+                    class VAEWrapper(torch.nn.Module):
+                        def __init__(self, m):
+                            super().__init__()
+                            self.m = m
+                        def forward(self, latents):
+                            return self.m.decoder(latents)
+                    wrapped_model = VAEWrapper(model).eval()
                 
                 def remove_all_weight_norms(m):
                     for name, child in m.named_children():
@@ -256,14 +281,23 @@ def main():
                         remove_all_weight_norms(child)
                 remove_all_weight_norms(wrapped_model)
                 
-                # Align shapes to 128 to match the 5.0 second Swift test length
-                # Trace with a small example input for fast PyTorch graph construction
                 if "STATIC_SEQ_LEN" in os.environ:
                     del os.environ["STATIC_SEQ_LEN"]
-                b, c, t = 1, 64, 128
-                example_input = (torch.randn((b, c, t), dtype=torch.float32),)
-                inputs_schema = [ct.TensorType(name="latents", shape=(1, 64, ct.RangeDim(16, 32768, default=128)), dtype=np.float32)]
-                outputs_schema = [ct.TensorType(name="audio")]
+
+                if is_encoder_export:
+                    # Encoder: stereo audio input with dynamic length
+                    # 30s at 48kHz = 1,440,000 samples; trace with shorter for speed
+                    b, c, t = 1, 2, 48000  # 1 second of stereo audio
+                    example_input = (torch.randn((b, c, t), dtype=torch.float32),)
+                    inputs_schema = [ct.TensorType(name="audio", shape=(1, 2, ct.RangeDim(4800, 48000 * 60, default=48000)), dtype=np.float32)]
+                    outputs_schema = [ct.TensorType(name="latent_mean")]
+                else:
+                    # Decoder: latent input with dynamic length
+                    # Align shapes to 128 to match the 5.0 second Swift test length
+                    b, c, t = 1, 64, 128
+                    example_input = (torch.randn((b, c, t), dtype=torch.float32),)
+                    inputs_schema = [ct.TensorType(name="latents", shape=(1, 64, ct.RangeDim(16, 32768, default=128)), dtype=np.float32)]
+                    outputs_schema = [ct.TensorType(name="audio")]
                 
             else:
                 try:

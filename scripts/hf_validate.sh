@@ -52,6 +52,17 @@ VAE_REQUIRED_FILES=(
   "encoder.safetensors"
 )
 
+# VAE Encoder repos: CoreML model only (no ancillary files)
+VAE_ENCODER_REPOS=(
+  "vae_encoder-coreml-4bit.mlpackage"
+  "vae_encoder-coreml-6bit.mlpackage"
+  "vae_encoder-coreml-8bit.mlpackage"
+  "vae_encoder-coreml-16bit.mlpackage"
+)
+VAE_ENCODER_REQUIRED_FILES=(
+  "Manifest.json"
+)
+
 # LM repos: need tokenizer.json, tokenizer_config.json
 LM_REPOS=(
   "acestep-5Hz-lm-0.6B-coreml-4bit.mlpackage"
@@ -290,7 +301,8 @@ echo "╚═══════════════════════�
 
 # Validate each model type
 validate_repos "DiT" "${DIT_REQUIRED_FILES[@]}" "--" "${DIT_REPOS[@]}"
-validate_repos "VAE" "${VAE_REQUIRED_FILES[@]}" "--" "${VAE_REPOS[@]}"
+validate_repos "VAE Decoder" "${VAE_REQUIRED_FILES[@]}" "--" "${VAE_REPOS[@]}"
+validate_repos "VAE Encoder" "${VAE_ENCODER_REQUIRED_FILES[@]}" "--" "${VAE_ENCODER_REPOS[@]}"
 validate_repos "LM" "${LM_REQUIRED_FILES[@]}" "--" "${LM_REPOS[@]}"
 validate_repos "Text Encoder" "${TEXT_ENCODER_REQUIRED_FILES[@]}" "--" "${TEXT_ENCODER_REPOS[@]}"
 
