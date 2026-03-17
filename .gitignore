@@ -261,3 +261,7 @@ generation_smoke_output/
 quantized_checkpoints_coreml/
 !quantized_checkpoints_coreml/hf-upload.sh
 debug*.txt
+mlx_tokenizer_export/audio_detokenizer/audio_detokenizer.safetensors
+mlx_tokenizer_export/audio_detokenizer/tokenizer_config.json
+mlx_tokenizer_export/audio_tokenizer/audio_tokenizer.safetensors
+mlx_tokenizer_export/audio_tokenizer/tokenizer_config.json

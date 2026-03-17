@@ -34,7 +34,7 @@ public struct PrepareConditionInputs {
     public var precomputedLmHints25Hz: MLXArray?
     /// [B] float/bool: 1 where item is cover, 0 otherwise. Used with precomputedLmHints25Hz to select LM hints vs src_latents.
     public var isCovers: MLXArray?
-    /// Reserved for future tokenize path. Unused in Phase 1.
+    /// Silence latent for tokenize path padding. Used by MLXAudioTokenizer when pool padding is needed.
     public var silenceLatent: MLXArray?
     /// Optional null condition embedding [1, 1, D] for CFG. Passed through to DiTConditions.
     public var nullConditionEmbedding: MLXArray?

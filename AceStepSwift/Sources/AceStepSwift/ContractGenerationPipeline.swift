@@ -89,11 +89,25 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         let b = config.batchSize
         let t = latentLengthFromDuration(durationSeconds: params.duration, sampleRate: sampleRate)
 
-        let schedule = DiffusionSchedule.getTimestepSchedule(
+        var schedule = DiffusionSchedule.getTimestepSchedule(
             shift: params.shift,
             timesteps: params.timesteps,
             inferSteps: params.inferenceSteps > 0 ? params.inferenceSteps : nil
         )
+
+        // Cover noise blending: truncate schedule when coverNoiseStrength > 0.
+        // Python: effective_noise_level = 1 - cover_noise_strength, find nearest_t,
+        // truncate schedule to start from nearest_t.
+        if params.coverNoiseStrength > 0, !schedule.isEmpty {
+            let effectiveNoiseLevel = 1.0 - params.coverNoiseStrength
+            let nearestT = schedule.min(by: { abs($0 - effectiveNoiseLevel) < abs($1 - effectiveNoiseLevel) })!
+            if let startIdx = schedule.firstIndex(of: nearestT) {
+                let originalCount = schedule.count
+                schedule = Array(schedule[startIdx...])
+                print("[ContractGenerationPipeline] Cover noise: strength=\(params.coverNoiseStrength), effectiveNoiseLevel=\(effectiveNoiseLevel), nearestT=\(nearestT), steps \(originalCount)→\(schedule.count)")
+            }
+        }
+
         #if DEBUG
         if let firstT = schedule.first, let lastT = schedule.last {
             debugPrint("[GenerationDiagnostics] timestep_schedule count=\(schedule.count) first=\(formatStat(Float(firstT))) last=\(formatStat(Float(lastT)))")
@@ -141,9 +155,24 @@ public final class ContractGenerationPipeline: GenerationPipeline {
 
         MLX.GPU.clearCache()
         
+        // Mid-loop conditioning switch: Python switches from cover→text2music at step `cover_steps`
+        let coverSteps = params.audioCoverStrength < 1.0 ? Int(Double(schedule.count) * params.audioCoverStrength) : schedule.count
+        var switchedToNonCover = false
+        
         var apgMomentumState: [String: MLXArray]? = [:]
         for (stepIdx, timestepVal) in schedule.enumerated() {
             print("[PipelineLoop] stepIdx=\(stepIdx) t=\(timestepVal)")
+            
+            // Switch to non-cover conditions at step `coverSteps` (Python: audio_cover_strength)
+            if stepIdx >= coverSteps, !switchedToNonCover, let nonCover = conditions.nonCoverConditions?.value {
+                switchedToNonCover = true
+                conditions.encoderHiddenStates = nonCover.encoderHiddenStates
+                conditions.encoderAttentionMask = nonCover.encoderAttentionMask
+                conditions.contextLatents = nonCover.contextLatents
+                // Reset APG momentum state on conditioning switch (matches Python KV cache reset)
+                apgMomentumState = [:]
+                print("[PipelineLoop] Switched to non-cover conditions at step \(stepIdx)/\(schedule.count)")
+            }
             
             let nextT: Float? = (stepIdx + 1 < schedule.count) ? Float(schedule[stepIdx + 1]) : nil
             let previousLatent = xt
@@ -290,7 +319,10 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             contextLatents: try align("contextLatents", conditions.contextLatents),
             encoderAttentionMask: try align("encoderAttentionMask", conditions.encoderAttentionMask),
             nullConditionEmbedding: conditions.nullConditionEmbedding,
-            initialLatents: try align("initialLatents", conditions.initialLatents)
+            initialLatents: try align("initialLatents", conditions.initialLatents),
+            nonCoverConditions: conditions.nonCoverConditions != nil
+                ? try alignConditionsToBatch(conditions.nonCoverConditions!.value, batchSize: batchSize)
+                : nil
         )
     }
 

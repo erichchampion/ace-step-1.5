@@ -67,6 +67,7 @@ The Python codebase (under `acestep/`) provides the reference implementation: au
 | Stepper | [MLXDiTStepper.swift](../Sources/AceStepSwift/MLXDiTStepper.swift) |
 | VAE | [MLXVAEDecoder.swift](../Sources/AceStepSwift/MLXVAEDecoder.swift), [MLXAutoEncoderOobleck.swift](../Sources/AceStepSwift/MLXAutoEncoderOobleck.swift), [VAEResidualUnit.swift](../Sources/AceStepSwift/VAEResidualUnit.swift), [VAEDecoderBlock.swift](../Sources/AceStepSwift/VAEDecoderBlock.swift), etc. |
 | Conditioning | [PrepareCondition.swift](../Sources/AceStepSwift/PrepareCondition.swift), [ConditionEncoder.swift](../Sources/AceStepSwift/ConditionEncoder.swift), [QwenTextHiddenStateProvider.swift](../Sources/AceStepSwift/QwenTextHiddenStateProvider.swift) |
+| Audio Tokenizer | [MLXAudioTokenizer.swift](../Sources/AceStepSwift/MLXAudioTokenizer.swift), [MLXAudioDetokenizer.swift](../Sources/AceStepSwift/MLXAudioDetokenizer.swift) |
 | Weight loading | [WeightLoading.swift](../Sources/AceStepSwift/WeightLoading.swift) |
 | Params / result | [GenerationParams.swift](../Sources/AceStepSwift/GenerationParams.swift), [GenerationConfig.swift](../Sources/AceStepSwift/GenerationConfig.swift), [GenerationResult.swift](../Sources/AceStepSwift/GenerationResult.swift), [DiffusionSchedule.swift](../Sources/AceStepSwift/DiffusionSchedule.swift) |
 
@@ -100,7 +101,8 @@ The Python codebase (under `acestep/`) provides the reference implementation: au
 
 ### 3.5 Conditioning contract
 
-- **DiTConditions:** `encoderHiddenStates` [B, encL, 2048], `contextLatents` [B, T, 128], optional `nullConditionEmbedding`, optional `initialLatents`.
+- **DiTConditions:** `encoderHiddenStates` [B, encL, 2048], `contextLatents` [B, T, 128], optional `nullConditionEmbedding`, optional `initialLatents`, optional `nonCoverConditions: Box<DiTConditions>?` (for mid-loop conditioning switch).
+- **Box\<T\>:** Reference-type wrapper class used to break the recursive struct cycle for `nonCoverConditions`. Defined in [DiTDiffusionContract.swift](../Sources/AceStepSwift/DiTDiffusionContract.swift).
 - **ConditioningProvider:** Closure type `(GenerationParams, Int, Int) -> DiTConditions?` — receives `(params, latentLength, sampleRate)` and should return conditions with shapes matching the diffusion loop (T = latentLength).
 - **Building conditions:** Use `prepareCondition(inputs:conditionEncoder:)` with [PrepareCondition](../Sources/AceStepSwift/PrepareCondition.swift) and optionally [ConditionEncoder](../Sources/AceStepSwift/ConditionEncoder.swift) plus [QwenTextHiddenStateProvider](../Sources/AceStepSwift/QwenTextHiddenStateProvider.swift), or load precomputed `encoder_hidden_states.bin` / `context_latents.bin` as in the smoke test.
 
@@ -323,7 +325,89 @@ To verify that all ancillary files are present and weights load correctly, check
 
 ---
 
-## 7. Review Findings and Possible Bugs
+## 7. Advanced Cover Features
+
+These features bring the Swift cover/repaint pipeline to full parity with the Python implementation.
+
+### 7.1 Cover Noise Blending (`coverNoiseStrength`)
+
+**Files:** [AppConditioningProvider.swift](../../cadenza-audio/Sources/Engine/AppConditioningProvider.swift), [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift)
+
+When `coverNoiseStrength > 0`, two things happen:
+
+1. **Noise blending** (`blendNoiseIfNeeded`): Initial latents are blended with noise: `xt = t * noise + (1 - t) * srcLatents`, where `t = 1.0 - coverNoiseStrength`. This matches Python's `renoise()`. When `coverNoiseStrength == 0`, `initialLatents` is nil (diffusion starts from pure noise).
+
+2. **Schedule truncation**: The diffusion timestep schedule is truncated to start from the nearest timestep corresponding to `1.0 - coverNoiseStrength`. This skips early high-noise steps, matching Python's behavior where the schedule is shortened for partial noise.
+
+### 7.2 Mid-Loop Conditioning Switch (`audioCoverStrength`)
+
+**Files:** [DiTDiffusionContract.swift](../Sources/AceStepSwift/DiTDiffusionContract.swift), [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift), [AppConditioningProvider.swift](../../cadenza-audio/Sources/Engine/AppConditioningProvider.swift)
+
+When `audioCoverStrength < 1.0`, the diffusion loop transitions from cover conditioning to text-to-music conditioning mid-loop:
+
+1. **`nonCoverConditions`**: A second set of `DiTConditions` is built using `silenceLatent` as `srcLatents` (matching Python's text-to-music path). Stored via `Box<DiTConditions>` wrapper to avoid recursive struct.
+
+2. **Switch point**: At step `coverSteps = schedule.count × audioCoverStrength`, the pipeline replaces the active conditions with `nonCoverConditions` and resets the APG momentum state.
+
+3. **Effect**: Lower `audioCoverStrength` means more steps use text-to-music conditioning, producing output that is less constrained by the source audio.
+
+### 7.3 MLX Audio Tokenizer / Detokenizer (LM Hints)
+
+**AceStepSwift modules:**
+- [MLXAudioTokenizer.swift](../Sources/AceStepSwift/MLXAudioTokenizer.swift) — `ResidualFSQ` quantizer + `AttentionPooler`
+- [MLXAudioDetokenizer.swift](../Sources/AceStepSwift/MLXAudioDetokenizer.swift) — expand + encoder layers + projection
+
+**cadenza-audio integration:**
+- [AudioTokenizerModelID.swift](../../cadenza-audio/Sources/ModelCatalog/AudioTokenizerModelID.swift) — model identifiers
+- Catalog entries in [AceStepModelCatalog.swift](../../cadenza-audio/Sources/ModelCatalog/AceStepModelCatalog.swift)
+- Storage/download support in [AceStepModelStorage.swift](../../cadenza-audio/Sources/ModelStorage/AceStepModelStorage.swift) and [AceStepModelDownloadManager.swift](../../cadenza-audio/Sources/Download/AceStepModelDownloadManager.swift)
+- Loading and wiring in [CadenzaEngineHolder.swift](../../cadenza-audio/Sources/Engine/CadenzaEngineHolder.swift)
+
+**Pipeline (when models are available and task is cover/repaint):**
+
+```
+srcLatents [B, T, 64]
+  → tokenize (project → AttentionPooler → ResidualFSQ) → quantized [B, T/5, D]
+  → detokenize (expand → encoder layers → proj_out) → lm_hints_25Hz [B, T, 64]
+  → crop to latentLength
+  → where(isCovers, lm_hints_25Hz, srcLatents) → effective srcLatents
+```
+
+This matches Python's `prepare_condition` flow: `self.tokenize(hidden_states, silence_latent, attention_mask)` → `self.detokenize(lm_hints_5Hz)` → `torch.where(is_covers, lm_hints_25Hz, src_latents)`. The pipeline is gracefully optional — cover generation works without the tokenizer models, just without LM hint enhancement.
+
+**Export and deployment:**
+- `scripts/export_mlx_tokenizer.py` extracts tokenizer (32 params, ~400 MB) and detokenizer (28 params, ~400 MB) from the turbo checkpoint
+- `scripts/hf_mlx_upload.sh` uploads to HuggingFace (`ewchampion/acestep-audio_tokenizer-mlx`, `ewchampion/acestep-audio_detokenizer-mlx`)
+
+### 7.4 Architecture Flow
+
+```mermaid
+flowchart LR
+    subgraph cover [Cover Pipeline]
+        SrcAudio[Source Audio] --> VAEEnc[VAE Encoder]
+        VAEEnc --> SrcLat[srcLatents]
+        SrcLat --> TokCheck{Audio Tokenizer\navailable?}
+        TokCheck -->|Yes| Tok[tokenize → FSQ]
+        Tok --> Detok[detokenize → lm_hints]
+        Detok --> Merge["where(isCovers)"]
+        TokCheck -->|No| Merge
+        SrcLat --> Merge
+        Merge --> Ctx[buildContextLatents]
+    end
+    subgraph diffusion [Diffusion Loop]
+        Ctx --> Loop[DiT Steps]
+        Loop -->|"step < coverSteps"| CoverCond[Cover Conditions]
+        Loop -->|"step ≥ coverSteps"| TextCond[Text2Music Conditions]
+    end
+    subgraph decode [Decode]
+        Loop --> VAEDec[VAE Decoder]
+        VAEDec --> Audio[Waveform]
+    end
+```
+
+---
+
+## 8. Review Findings and Possible Bugs
 
 Findings from reviewing the Swift code for parity with Python and for library robustness.
 
@@ -338,7 +422,7 @@ Findings from reviewing the Swift code for parity with Python and for library ro
 | **Snake1d dtype** | [VAESnake1d](../Sources/AceStepSwift/VAESnake1d.swift) | Minor | Swift does not special-case float32 upcast for exp/sin when weights are float16; Python may. Effect is minor for typical float32 VAE. |
 | **APG double-epsilon** | [APG.swift](../Sources/AceStepSwift/APG.swift) | Resolved | Swift had epsilon inside `sqrt(diffSq + 1e-8)` AND in `normThreshold / (diffNorm + 1e-8)`. Python only adds epsilon in the denominator. Fixed: removed epsilon from inside `sqrt()`. |
 | **SDE inference method** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Not implemented | Python `dit_generate.py` supports `infer_method="sde"` (pred_clean → noise blend); Swift only implements ODE. `GenerationParams.inferMethod` exists but is ignored. |
-| **Cover condition switching** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Not implemented | Python switches conditioning mid-diffusion based on `audio_cover_strength` and `cover_steps`; Swift runs all steps with the same conditions. |
+| **Cover condition switching** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Resolved | Python switches conditioning mid-diffusion based on `audio_cover_strength` and `cover_steps`; Swift now implements this via `nonCoverConditions` on `DiTConditions` with `Box<T>` wrapper and step-based switching in the diffusion loop. See §7.2. |
 
 For a detailed logic-by-logic comparison of Swift and Python (DiT, VAE, schedule, conditioning), see [SWIFT_VS_PYTHON_LOGIC.md](SWIFT_VS_PYTHON_LOGIC.md). For DiT port status and weight-loading notes, see [DIT_PORT_STATUS.md](DIT_PORT_STATUS.md).
 

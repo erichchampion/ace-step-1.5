@@ -6,6 +6,12 @@
 import Foundation
 import MLX
 
+/// Reference-type wrapper to break recursive struct cycles.
+public final class Box<T> {
+    public var value: T
+    public init(_ value: T) { self.value = value }
+}
+
 /// Conditioning inputs for one DiT step (encoder hidden states and context latents).
 /// For cover/repaint/lego: set initialLatents so the pipeline starts from src_latents instead of noise.
 public struct DiTConditions {
@@ -17,19 +23,25 @@ public struct DiTConditions {
     public var nullConditionEmbedding: MLXArray?
     /// When non-nil, pipeline uses this as the initial latent (e.g. encoded src_audio or repaint base). When nil, starts from noise.
     public var initialLatents: MLXArray?
+    /// When non-nil with audioCoverStrength < 1.0, the pipeline switches to these conditions
+    /// at step `cover_steps` to transition from cover to text2music mode mid-diffusion.
+    /// Uses `Box` wrapper to avoid recursive struct (Swift value type limitation).
+    public var nonCoverConditions: Box<DiTConditions>?
 
     public init(
         encoderHiddenStates: MLXArray? = nil,
         contextLatents: MLXArray? = nil,
         encoderAttentionMask: MLXArray? = nil,
         nullConditionEmbedding: MLXArray? = nil,
-        initialLatents: MLXArray? = nil
+        initialLatents: MLXArray? = nil,
+        nonCoverConditions: DiTConditions? = nil
     ) {
         self.encoderHiddenStates = encoderHiddenStates
         self.contextLatents = contextLatents
         self.encoderAttentionMask = encoderAttentionMask
         self.nullConditionEmbedding = nullConditionEmbedding
         self.initialLatents = initialLatents
+        self.nonCoverConditions = nonCoverConditions.map { Box($0) }
     }
 }
 
