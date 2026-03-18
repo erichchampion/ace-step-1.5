@@ -407,12 +407,77 @@ flowchart LR
 
 ---
 
-## 8. Review Findings and Possible Bugs
+## 8. Model Memory Management
+
+The app uses a tiered lazy loading and automatic unloading strategy to minimize memory consumption. Not all models are needed at all times — only the core pipeline (DiT + VAE decoder + text encoder) is loaded at startup. Other models load on demand and unload when no longer needed.
+
+### 8.1 Model Tiers
+
+| Tier | Models | Approx. Size (6-bit) | When Needed | Loading Strategy |
+|------|--------|---------------------|-------------|-----------------|
+| **Core** (always loaded) | DiT Stepper, VAE Decoder, Text Encoder, ConditionEncoder | ~1.7 GB | Every generation | Loaded eagerly in `reloadPipeline()` |
+| **Tier 1** (cover-only) | VAE Encoder, Audio Tokenizer, Audio Detokenizer | ~920 MB | Cover/repaint tasks only | Lazy-loaded via `prepareCoverModels()` |
+| **Tier 2** (LLM) | LLM Format Provider (0.6B–4B) | 250 MB – 8 GB | "Format Lyrics" / "Create Sample" only | Lazy-loaded via `ensureLLMLoaded()` |
+
+### 8.2 Lazy Loading Flow
+
+**Files:** [CadenzaEngineHolder.swift](../../cadenza-audio/Sources/Engine/CadenzaEngineHolder.swift), [SongGenerationView.swift](../../cadenza-audio/Sources/Views/SongGenerationView.swift), [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift)
+
+When `reloadPipeline()` runs, it:
+1. Loads core models (DiT, VAE decoder, text encoder) eagerly
+2. **Stores directory URLs** for Tier 1 and Tier 2 models instead of loading them
+3. Builds the initial `ConditioningProvider` without cover models (they are `nil`)
+
+When a cover/repaint generation is requested:
+1. `SongGenerationView.runGenerate()` calls `engineHolder.prepareCoverModels()` (shows "Loading cover models...")
+2. `prepareCoverModels()` loads and **caches** the VAE encoder (async CoreML), audio tokenizer (sync MLX), and audio detokenizer (sync MLX)
+3. The conditioning provider is rebuilt with the loaded cover models via `ContractGenerationPipeline.updateConditioningProvider(_:)`
+4. Subsequent cover/repaint generations reuse cached instances (no reload)
+
+When "Format Lyrics" is tapped:
+1. `SongGenerationView.runFormatSample()` calls `engineHolder.ensureLLMLoaded()` (shows "Loading LLM...")
+2. The LLM loads on first use and is available for the operation
+
+### 8.3 Automatic Unloading
+
+Models are automatically unloaded in three scenarios:
+
+| Trigger | What Unloads | Method |
+|---------|-------------|--------|
+| User switches mode picker to "Text to music" | Tier 1 (cover models) | `unloadCoverModels()` |
+| "Format Lyrics" completes | Tier 2 (LLM) | `unloadLLM()` |
+| System memory pressure (warning) | Tier 1 (cover models) | `DispatchSourceMemoryPressure` handler |
+| System memory pressure (critical) | Tier 1 + Tier 2 | `unloadNonEssentialModels()` |
+
+All unload methods also call `MLX.GPU.clearCache()` to release Metal buffer caches. Models re-load automatically on next use since the directory URLs are preserved.
+
+### 8.4 Memory Lifecycle
+
+```
+App Start → reloadPipeline()
+  ├─ Core models loaded (~1.7 GB)
+  ├─ Tier 1 URLs stored (not loaded)
+  └─ Tier 2 URL stored (not loaded)
+
+text2music → Generate directly (~1.7 GB)
+
+cover/repaint → prepareCoverModels() (+920 MB → ~2.6 GB)
+  └─ Switch to text2music → unloadCoverModels() (-920 MB → ~1.7 GB)
+
+Format Lyrics → ensureLLMLoaded() (+250 MB–8 GB)
+  └─ Format complete → unloadLLM() (back to baseline)
+
+Memory pressure → unloadNonEssentialModels() (back to ~1.7 GB)
+```
+
+---
+
+## 9. Review Findings and Possible Bugs
 
 Findings from reviewing the Swift code for parity with Python and for library robustness.
 
 | Finding | Location | Severity | Notes |
-|--------|----------|----------|--------|
+|--------|----------|----------|-------|
 | **Architectural Parity** | `DiTDecoder`, `DiTLayer`, `ContractGenerationPipeline`, etc. | Verified | Swift DiT components, conditioning pipelines, and attention modules closely mirror Python's `AceStepDiTModel`, `AceStepDiTLayer` and `_mlx_run_diffusion(...)` logic. Python references were directly annotated into Swift source code to help with traceability and parity maintenance. |
 | **Hardcoded debug log path** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Resolved | File logging to a fixed path was removed; the library no longer writes debug logs to disk. Use `debugPrint` in DEBUG builds only. |
 | **`loadArrays` dependency** | [WeightLoading.swift](../Sources/AceStepSwift/WeightLoading.swift) (lines 53, 84) | Resolved | `loadDiTParameters` and `loadParameters` use **MLX**'s `loadArrays(url:stream:)` (mlx-swift package) to read safetensors. The AceStepSwift target already depends on MLX; no in-repo implementation is required. |
@@ -425,4 +490,3 @@ Findings from reviewing the Swift code for parity with Python and for library ro
 | **Cover condition switching** | [ContractGenerationPipeline.swift](../Sources/AceStepSwift/ContractGenerationPipeline.swift) | Resolved | Python switches conditioning mid-diffusion based on `audio_cover_strength` and `cover_steps`; Swift now implements this via `nonCoverConditions` on `DiTConditions` with `Box<T>` wrapper and step-based switching in the diffusion loop. See §7.2. |
 
 For a detailed logic-by-logic comparison of Swift and Python (DiT, VAE, schedule, conditioning), see [SWIFT_VS_PYTHON_LOGIC.md](SWIFT_VS_PYTHON_LOGIC.md). For DiT port status and weight-loading notes, see [DIT_PORT_STATUS.md](DIT_PORT_STATUS.md).
-

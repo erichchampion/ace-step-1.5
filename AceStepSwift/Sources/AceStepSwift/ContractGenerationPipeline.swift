@@ -60,7 +60,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     private let stepper: DiffusionStepper
     private let decoder: VAEDecoder
     private let sampleRate: Int
-    private let conditioningProvider: ConditioningProvider?
+    private var conditioningProvider: ConditioningProvider?
     public let maxDuration: Double
 
     public var isInitialized: Bool { true }
@@ -83,6 +83,11 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         self.sampleRate = sampleRate
         self.conditioningProvider = conditioningProvider
         self.maxDuration = maxDuration
+    }
+
+    /// Replace the conditioning provider (e.g. after lazily loading cover models).
+    public func updateConditioningProvider(_ provider: ConditioningProvider?) {
+        self.conditioningProvider = provider
     }
 
     public func run(params: GenerationParams, config: GenerationConfig, progress: ((Double, String) -> Void)?) async throws -> GenerationResult {
