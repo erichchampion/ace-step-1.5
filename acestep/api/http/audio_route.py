@@ -20,8 +20,14 @@ def register_audio_route(
 
         from fastapi.responses import FileResponse
 
-        allowed_dir = Path(request.app.state.temp_audio_dir).resolve(strict=False)
+        # Disallow absolute paths from the client outright.
+        user_path = Path(path)
+        if user_path.is_absolute():
+            raise HTTPException(status_code=403, detail="Access denied: absolute paths are not allowed")
+
+        # Resolve the allowed directory and construct the final path relative to it.
         resolved_path = (allowed_dir / path).resolve(strict=False)
+        resolved_path = (allowed_dir / user_path).resolve(strict=False)
         try:
             resolved_path.relative_to(allowed_dir)
         except ValueError:
