@@ -20,8 +20,8 @@ def register_audio_route(
 
         from fastapi.responses import FileResponse
 
-        resolved_path = Path(path).resolve(strict=False)
         allowed_dir = Path(request.app.state.temp_audio_dir).resolve(strict=False)
+        resolved_path = (allowed_dir / path).resolve(strict=False)
         try:
             resolved_path.relative_to(allowed_dir)
         except ValueError:
