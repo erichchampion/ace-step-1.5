@@ -30,10 +30,8 @@ public final class CoreMLLLMFormatProvider: LLMFormatProvider {
             throw CoreMLLLMFormatProviderError.modelFileNotFound(directory.path)
         }
         
-        // Load MLModel
-        let config = MLModelConfiguration()
-        // Bypass ANE to avoid MLIR pass manager crashes and ios17.mul broadcasting bugs with dynamic shapes
-        config.computeUnits = .cpuOnly
+        // Load MLModel — bypass ANE to avoid MLIR pass manager crashes and ios17.mul broadcasting bugs with dynamic shapes
+        let config = CoreMLConfigFactory.makeConfig(computeUnits: .cpuOnly)
         
         let compiledURL = try await CoreMLHelper.compileIfNeeded(modelURL: directory)
         let loadedModel = try MLModel(contentsOf: compiledURL, configuration: config)

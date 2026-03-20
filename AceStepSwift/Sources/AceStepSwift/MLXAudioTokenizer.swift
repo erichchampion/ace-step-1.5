@@ -10,7 +10,7 @@ import MLX
 import MLXNN
 
 /// Configuration for audio tokenizer/detokenizer.
-public struct AudioTokenizerConfig {
+public struct AudioTokenizerConfig: Sendable {
     public var hiddenSize: Int
     public var acousticHiddenDim: Int
     public var poolWindowSize: Int

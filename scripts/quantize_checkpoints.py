@@ -24,6 +24,14 @@ def main():
     import glob
     parser = argparse.ArgumentParser(description="Quantize models to Core ML format.")
     parser.add_argument("model_name", type=str, nargs="?", help="Optional: Name of a specific model to quantize.")
+    parser.add_argument("--sparse", type=float, default=0.0,
+                        help="Target sparsity (0.0-0.9). Applies magnitude pruning before palettization for combined compression.")
+    parser.add_argument("--grouped", action="store_true",
+                        help="Use per-grouped-channel palettization granularity for ≤6-bit models (better accuracy at low bit depths).")
+    parser.add_argument("--group-size", type=int, default=16,
+                        help="Channel group size for per-grouped-channel palettization (default: 16). Only used with --grouped.")
+    parser.add_argument("--ios18", action="store_true",
+                        help="Set minimum deployment target to iOS 18 for SDPA op fusion and 4-bit quantization support.")
     args = parser.parse_args()
 
     def log(msg):
@@ -472,13 +480,14 @@ def main():
             log("  Tracing PyTorch model...")
             traced_model = trace_with_stack(wrapped_model, example_input, strict=False)
 
-            log("  Converting to uncompressed Core ML representation (in-memory)...")
+            deploy_target = ct.target.iOS18 if args.ios18 else ct.target.macOS14
+            log(f"  Converting to uncompressed Core ML representation (in-memory, target={deploy_target})...")
             mlmodel = ct.convert(
                 traced_model,
                 inputs=inputs_schema,
                 outputs=outputs_schema,
                 convert_to="mlprogram",
-                minimum_deployment_target=ct.target.macOS14,
+                minimum_deployment_target=deploy_target,
                 compute_units=ct.ComputeUnit.CPU_ONLY,
                 skip_model_load=True,
             )
@@ -566,21 +575,47 @@ def main():
             if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 torch.mps.empty_cache()
             
+            # Apply optional pre-palettization pruning (sparse palettization)
+            source_mlmodel = mlmodel
+            if args.sparse > 0:
+                log(f"  [Sparse] Applying {args.sparse*100:.0f}% magnitude pruning before palettization...")
+                prune_config = ct.optimize.coreml.OpMagnitudePrunerConfig(
+                    target_sparsity=args.sparse,
+                    weight_threshold=4096
+                )
+                prune_opt = ct.optimize.coreml.OptimizationConfig(
+                    global_config=prune_config,
+                    op_type_configs={"conv": None, "conv_transpose": None, "embedding": None}
+                )
+                source_mlmodel = ct.optimize.coreml.prune_weights(mlmodel, config=prune_opt)
+                log(f"  [Sparse] Pruning complete — {args.sparse*100:.0f}% of weights zeroed")
+
             for bits in bits_to_process:
                 output_path = quantized_dir / f"{item.name}-coreml-{bits}bit.mlpackage"
                 try:
                     if bits == 16:
                         log(f"  [16-bit] Saving uncompressed mlprogram directly to '{output_path}'...")
-                        mlmodel.save(str(output_path))
+                        source_mlmodel.save(str(output_path))
                         log(f"  [16-bit] Successfully created '{output_path}'.")
                     else:
-                        log(f"  [{bits}-bit] Applying palettization...")
-                        op_config = ct.optimize.coreml.OpPalettizerConfig(mode="kmeans", nbits=bits, weight_threshold=4096)
+                        # Use per-grouped-channel granularity when --grouped is specified and bits ≤ 6.
+                        # This assigns separate lookup tables per group of channels, dramatically
+                        # improving accuracy at low bit depths (especially 4-bit).
+                        use_grouped = args.grouped and bits <= 6
+                        granularity_str = f"per_grouped_channel (group_size={args.group_size})" if use_grouped else "per_tensor"
+                        log(f"  [{bits}-bit] Applying palettization (granularity={granularity_str})...")
+
+                        palette_kwargs = dict(mode="kmeans", nbits=bits, weight_threshold=4096)
+                        if use_grouped:
+                            palette_kwargs["granularity"] = "per_grouped_channel"
+                            palette_kwargs["group_size"] = args.group_size
+
+                        op_config = ct.optimize.coreml.OpPalettizerConfig(**palette_kwargs)
                         config = ct.optimize.coreml.OptimizationConfig(
                             global_config=op_config,
                             op_type_configs={"conv": None, "conv_transpose": None, "embedding": None}
                         )
-                        compressed_mlmodel = ct.optimize.coreml.palettize_weights(mlmodel, config=config)
+                        compressed_mlmodel = ct.optimize.coreml.palettize_weights(source_mlmodel, config=config)
                         log(f"  [{bits}-bit] Saving to '{output_path}'...")
                         compressed_mlmodel.save(str(output_path))
                         log(f"  [{bits}-bit] Successfully created '{output_path}'.")

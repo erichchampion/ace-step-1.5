@@ -9,7 +9,7 @@ import MLX
 import MLXNN
 
 /// Config for the condition encoder. Matches Python AceStepConfig encoder-related fields.
-public struct ConditionEncoderConfig {
+public struct ConditionEncoderConfig: Sendable {
     public var textHiddenDim: Int
     public var hiddenSize: Int
     public var timbreHiddenDim: Int

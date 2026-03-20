@@ -45,7 +45,15 @@ for checkpoint_path in "${checkpoint_dirs[@]}"; do
   echo "Quantizing: $checkpoint_name"
   echo "  Log: $log_file"
 
-  python ./scripts/quantize_checkpoints.py "$checkpoint_name" 2>&1 | tee "$log_file"
+  # Per-model sparsity: DiT tolerates aggressive pruning, VAE is sensitive to artifacts
+  case "$checkpoint_name" in
+    acestep*)  sparse_val=0.3 ;;   # DiT transformer — largest model, most prunable
+    vae*)      sparse_val=0.1 ;;   # VAE encoder/decoder — audio fidelity sensitive
+    *)         sparse_val=0.2 ;;   # Text encoder, LLM — moderate pruning
+  esac
+  echo "  Sparsity: ${sparse_val}"
+
+  python ./scripts/quantize_checkpoints.py "$checkpoint_name" --grouped --sparse "$sparse_val" --ios18 2>&1 | tee "$log_file"
   exit_code=${pipestatus[1]}
 
   if [[ $exit_code -ne 0 ]]; then

@@ -8,12 +8,50 @@ public final class CoreMLDiTStepper: DiffusionStepper {
     private let model: MLModel
     private let d: Int // audio_acoustic_hidden_dim, usually 64
 
+    // Cached per-sequence-length prediction arrays to avoid re-allocating every step
+    private var cachedSeqLen: Int = 0
+    private var cachedMaskShaped: MLShapedArray<Float>?
+    private var cachedPosShaped: MLShapedArray<Int32>?
+    private var cachedCacheShaped: MLShapedArray<Int32>?
+    private var cachedSWMaskShaped: MLShapedArray<Float>?
+
     public init(modelURL: URL, d: Int = 64) async throws {
-        let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndGPU // Bypass ANE due to ios17.mul broadcasting crash with RangeDim
+        let config = CoreMLConfigFactory.makeConfig(computeUnits: .cpuAndGPU) // Bypass ANE due to ios17.mul broadcasting crash with RangeDim
         let compiledURL = try await CoreMLHelper.compileIfNeeded(modelURL: modelURL)
         self.model = try MLModel(contentsOf: compiledURL, configuration: config)
         self.d = d
+    }
+
+    /// Clear cached prediction arrays to free memory after generation.
+    public func clearPredictionCache() {
+        cachedSeqLen = 0
+        cachedMaskShaped = nil
+        cachedPosShaped = nil
+        cachedCacheShaped = nil
+        cachedSWMaskShaped = nil
+    }
+
+    /// Build or retrieve cached per-sequence-length arrays.
+    private func ensureCachedArrays(batch: Int, seq: Int) {
+        guard seq != cachedSeqLen else { return }
+        cachedSeqLen = seq
+
+        cachedMaskShaped = MLShapedArray<Float>(scalars: [Float](repeating: 1.0, count: seq), shape: [batch, seq])
+
+        let downSeq = seq / 2
+        let positionsData = (0..<downSeq).map { Int32($0) }
+        cachedPosShaped = MLShapedArray<Int32>(scalars: positionsData, shape: [batch, downSeq])
+        cachedCacheShaped = MLShapedArray<Int32>(scalars: positionsData, shape: [downSeq])
+
+        // Build sliding window mask [1, 1, downSeq, downSeq]
+        let slidingWindow = 128
+        var swMaskData = [Float](repeating: 0, count: downSeq * downSeq)
+        for i in 0..<downSeq {
+            for j in 0..<downSeq {
+                swMaskData[i * downSeq + j] = abs(i - j) <= slidingWindow ? 0.0 : -65500.0
+            }
+        }
+        cachedSWMaskShaped = MLShapedArray<Float>(scalars: swMaskData, shape: [1, 1, downSeq, downSeq])
     }
 
     public func predictVelocity(currentLatent: MLXArray, timestep: Float, conditions: DiTConditions, useCache: Bool) -> MLXArray {
@@ -28,8 +66,7 @@ public final class CoreMLDiTStepper: DiffusionStepper {
             let latentData = currentLatent.contiguous().asArray(Float.self)
             let latentShaped = MLShapedArray<Float>(scalars: latentData, shape: [batch, seq, d])
             
-            let maskData = [Float](repeating: 1.0, count: seq)
-            let maskShaped = MLShapedArray<Float>(scalars: maskData, shape: [batch, seq])
+            ensureCachedArrays(batch: batch, seq: seq)
             
             let tShaped = MLShapedArray<Float>(scalars: [timestep], shape: [1])
             let trShaped = MLShapedArray<Float>(scalars: [timestep], shape: [1])
@@ -57,33 +94,17 @@ public final class CoreMLDiTStepper: DiffusionStepper {
             let ctxData = ctxLatents.contiguous().asArray(Float.self)
             let ctxShaped = MLShapedArray<Float>(scalars: ctxData, shape: [batch, seq, ctxW])
             
-            let downSeq = seq / 2
-            let positionsData = (0..<downSeq).map { Int32($0) }
-            let posShaped = MLShapedArray<Int32>(scalars: positionsData, shape: [batch, downSeq])
-            let cacheShaped = MLShapedArray<Int32>(scalars: positionsData, shape: [downSeq])
-            
-            // Build sliding window mask [1, 1, downSeq, downSeq]
-            // |i-j| <= 128 → 0.0 (attend), else -65500.0 (masked)
-            let slidingWindow = 128
-            var swMaskData = [Float](repeating: 0, count: downSeq * downSeq)
-            for i in 0..<downSeq {
-                for j in 0..<downSeq {
-                    swMaskData[i * downSeq + j] = abs(i - j) <= slidingWindow ? 0.0 : -65500.0
-                }
-            }
-            let swMaskShaped = MLShapedArray<Float>(scalars: swMaskData, shape: [1, 1, downSeq, downSeq])
-            
             let inputProvider = try MLDictionaryFeatureProvider(dictionary: [
                 "hidden_states": MLMultiArray(latentShaped),
                 "timestep": MLMultiArray(tShaped),
                 "timestep_r": MLMultiArray(trShaped),
-                "attention_mask": MLMultiArray(maskShaped),
+                "attention_mask": MLMultiArray(cachedMaskShaped!),
                 "encoder_hidden_states": MLMultiArray(encShaped),
                 "encoder_attention_mask": MLMultiArray(encMaskShaped),
                 "context_latents": MLMultiArray(ctxShaped),
-                "position_ids": MLMultiArray(posShaped),
-                "cache_position": MLMultiArray(cacheShaped),
-                "sliding_window_mask": MLMultiArray(swMaskShaped)
+                "position_ids": MLMultiArray(cachedPosShaped!),
+                "cache_position": MLMultiArray(cachedCacheShaped!),
+                "sliding_window_mask": MLMultiArray(cachedSWMaskShaped!)
             ])
             
             let output = try model.prediction(from: inputProvider)

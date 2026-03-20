@@ -1,4 +1,5 @@
 {
+  "originHash" : "a79db3b1c4c67d88e6a9511303d3fc950acae2a593eb44054d31493df3bcf615",
   "pins" : [
     {
       "identity" : "audiokit",
@@ -91,5 +92,5 @@
       }
     }
   ],
-  "version" : 2
+  "version" : 3
 }

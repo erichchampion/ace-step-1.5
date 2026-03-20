@@ -1,11 +1,11 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
     name: "AceStepSwift",
     platforms: [
-        .iOS(.v17),   // Minimum iOS 17 (MLX requires 16+). App target must also set deployment target ≥ 17.
-        .macOS(.v14),
+        .iOS(.v18),   // iOS 18 enables SDPA fusion, per-block quantization, stateful models, and multi-function models.
+        .macOS(.v15),
     ],
     products: [
         .library(name: "AceStepSwift", targets: ["AceStepSwift"]),
@@ -26,7 +26,8 @@ let package = Package(
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
-            path: "Sources/AceStepSwift"
+            path: "Sources/AceStepSwift",
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
             name: "AceStepSwiftTests",

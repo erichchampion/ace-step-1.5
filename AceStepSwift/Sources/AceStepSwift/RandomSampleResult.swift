@@ -4,7 +4,7 @@
  custom_mode (caption, lyrics, bpm, duration, keyscale, language, timesignature).
  */
 
-public struct RandomSampleResult {
+public struct RandomSampleResult: Sendable {
     public var caption: String
     public var lyrics: String
     public var bpm: Int?

@@ -30,11 +30,9 @@ public final class CoreMLTextHiddenStateProvider: TextHiddenStateProvider {
             throw CoreMLTextHiddenStateProviderError.modelFileNotFound(directory.path)
         }
         
-        // Load MLModel
-        let config = MLModelConfiguration()
-        // Bypass ANE and GPU to avoid MLIR pass manager crashes with Qwen dynamic shapes.
+        // Load MLModel — bypass ANE and GPU to avoid MLIR pass manager crashes with Qwen dynamic shapes.
         // The text encoder only runs once per generation, so CPU performance is perfectly adequate.
-        config.computeUnits = .cpuOnly 
+        let config = CoreMLConfigFactory.makeConfig(computeUnits: .cpuOnly)
         let compiledURL = try await CoreMLHelper.compileIfNeeded(modelURL: directory)
         let model = try MLModel(contentsOf: compiledURL, configuration: config)
         

@@ -9,8 +9,7 @@ public final class CoreMLVAEEncoder {
     private let model: MLModel
 
     public init(modelURL: URL) async throws {
-        let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndGPU
+        let config = CoreMLConfigFactory.makeConfig(computeUnits: .cpuAndGPU)
         let compiledURL = try await CoreMLHelper.compileIfNeeded(modelURL: modelURL)
         self.model = try MLModel(contentsOf: compiledURL, configuration: config)
     }

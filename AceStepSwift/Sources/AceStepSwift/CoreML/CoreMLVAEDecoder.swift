@@ -8,8 +8,7 @@ public final class CoreMLVAEDecoder: VAEDecoder {
     private let model: MLModel
 
     public init(modelURL: URL) async throws {
-        let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndGPU // Bypass ANE for VAE due to compilation hang with conv_transpose respecialization
+        let config = CoreMLConfigFactory.makeConfig(computeUnits: .cpuAndGPU) // Bypass ANE for VAE due to compilation hang with conv_transpose respecialization
         let compiledURL = try await CoreMLHelper.compileIfNeeded(modelURL: modelURL)
         self.model = try MLModel(contentsOf: compiledURL, configuration: config)
     }

@@ -295,6 +295,9 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         MLX.GPU.clearCache()
 
         let audios = buildAudiosFromDecoded(audio)
+        // All audio data is now materialized into [Float] arrays — release the MLXArray references
+        // and clear the GPU cache so Metal buffers are freed immediately.
+        MLX.GPU.clearCache()
         progress?(1.0, "Done")
         return GenerationResult(
             audios: audios,
