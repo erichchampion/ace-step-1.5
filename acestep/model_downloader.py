@@ -33,7 +33,7 @@ _CHECKPOINT_TO_VARIANT: Dict[str, str] = {
     "acestep-v15-turbo-shift3": "turbo",
     "acestep-v15-turbo-continuous": "turbo",
     "acestep-v15-turbo-fix-inst-shift3": "turbo",
-    "acestep-v15-turbo-fix-inst-shift-continous": "turbo",
+    "acestep-v15-turbo-fix-inst-shift-continuous": "turbo",
     "acestep-v15-turbo-fix-inst-shift-dynamic": "turbo",
     "acestep-v15-turbo-rl": "turbo",
 }
@@ -308,9 +308,18 @@ DEFAULT_LM_MODEL = "acestep-5Hz-lm-1.7B"
 
 
 def get_project_root() -> Path:
-    """Get the project root directory."""
-    current_file = Path(__file__).resolve()
-    return current_file.parent.parent
+    """Get the project root directory.
+
+    Returns the directory set by the ``ACESTEP_PROJECT_ROOT`` environment
+    variable when present, otherwise the current working directory.  Using
+    the working directory (rather than ``__file__``) keeps the checkpoints
+    folder next to where the user launched the process, regardless of whether
+    the package was installed via ``pip install .`` or run from source.
+    """
+    env_root = os.environ.get("ACESTEP_PROJECT_ROOT")
+    if env_root:
+        return Path(env_root).resolve()
+    return Path(os.getcwd())
 
 
 def get_checkpoints_dir(custom_dir: Optional[str] = None) -> Path:
@@ -320,12 +329,36 @@ def get_checkpoints_dir(custom_dir: Optional[str] = None) -> Path:
     return get_project_root() / "checkpoints"
 
 
+def _contains_model_weights(model_path: Path) -> bool:
+    """Return whether a model directory contains at least one weights artifact.
+
+    Args:
+        model_path: Candidate model directory path.
+
+    Returns:
+        `True` when a known model weights file exists in the directory.
+    """
+    weight_filenames = (
+        "model.safetensors",
+        "model.safetensors.index.json",
+        "pytorch_model.bin",
+        "pytorch_model.bin.index.json",
+        "diffusion_pytorch_model.safetensors",
+        "diffusion_pytorch_model.safetensors.index.json",
+        "diffusion_pytorch_model.bin",
+        "diffusion_pytorch_model.bin.index.json",
+    )
+    if not model_path.is_dir():
+        return False
+    return any((model_path / filename).exists() for filename in weight_filenames)
+
+
 def check_main_model_exists(checkpoints_dir: Optional[Path] = None) -> bool:
     """
     Check if the main model components exist in the checkpoints directory.
-    
+
     Returns:
-        True if all main model components exist, False otherwise.
+        True if all main model components contain weights, False otherwise.
     """
     if checkpoints_dir is None:
         checkpoints_dir = get_checkpoints_dir()
@@ -334,7 +367,7 @@ def check_main_model_exists(checkpoints_dir: Optional[Path] = None) -> bool:
 
     for component in MAIN_MODEL_COMPONENTS:
         component_path = checkpoints_dir / component
-        if not component_path.exists():
+        if not _contains_model_weights(component_path):
             return False
     return True
 
@@ -359,7 +392,7 @@ def check_model_exists(model_name: str, checkpoints_dir: Optional[Path] = None) 
         checkpoints_dir = Path(checkpoints_dir)
 
     model_path = checkpoints_dir / model_name
-    return model_path.exists()
+    return _contains_model_weights(model_path)
 
 
 def list_available_models() -> Dict[str, str]:

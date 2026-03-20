@@ -10,6 +10,7 @@ import json
 import time as time_module
 
 import gradio as gr
+import torch
 from loguru import logger
 
 from acestep.inference import generate_music, GenerationParams, GenerationConfig
@@ -51,8 +52,12 @@ def generate_with_progress(
     lm_batch_chunk_size,
     enable_normalization,
     normalization_db,
+    fade_in_duration,
+    fade_out_duration,
     latent_shift,
     latent_rescale,
+    repaint_mode,
+    repaint_strength,
     progress=gr.Progress(track_tqdm=True),
 ):
     """Generate audio with progress tracking.
@@ -140,8 +145,12 @@ def generate_with_progress(
         use_constrained_decoding=True,
         enable_normalization=enable_normalization,
         normalization_db=normalization_db,
+        fade_in_duration=fade_in_duration if fade_in_duration else 0.0,
+        fade_out_duration=fade_out_duration if fade_out_duration else 0.0,
         latent_shift=latent_shift,
         latent_rescale=latent_rescale,
+        repaint_mode=repaint_mode if repaint_mode else "balanced",
+        repaint_strength=float(repaint_strength) if repaint_strength is not None else 0.5,
     )
 
     if isinstance(seed, str) and seed.strip():
@@ -341,12 +350,17 @@ def generate_with_progress(
     final_codes_display = [gr.skip()] * 8
     final_accordions = [gr.skip()] * 8
 
+    extra_to_store = {**result.extra_outputs, "lrcs": final_lrcs_list, "subtitles": final_subtitles_list}
+    for k, v in extra_to_store.items():
+        if isinstance(v, torch.Tensor) and v.is_cuda:
+            extra_to_store[k] = v.cpu()
+
     yield (
         *audio_playback_updates,
         all_audio_paths, generation_info, "Generation Complete", seed_value_for_ui,
         *final_scores_list, *final_codes_display, *final_accordions, *final_lrcs_list,
         lm_generated_metadata, is_format_caption,
-        {**result.extra_outputs, "lrcs": final_lrcs_list, "subtitles": final_subtitles_list},
+        extra_to_store,
         final_codes_list,
     )
 
