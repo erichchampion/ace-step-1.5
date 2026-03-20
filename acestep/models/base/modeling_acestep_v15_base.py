@@ -61,6 +61,7 @@ def create_4d_mask(
     sliding_window: Optional[int] = None,
     is_sliding_window: bool = False,
     is_causal: bool = True,
+    mask_len: Optional[int] = None,
 ) -> torch.Tensor:
     """
     General 4D Attention Mask generator compatible with CPU/Mac/SDPA and Eager mode.
@@ -73,64 +74,53 @@ def create_4d_mask(
     Returns:
         [Batch, 1, Seq_Len, Seq_Len] additive mask (0.0 for keep, -inf for mask)
     """
-    # ------------------------------------------------------
-    # 1. Construct basic geometry mask [Seq_Len, Seq_Len]
-    # ------------------------------------------------------
+    if mask_len is None:
+        mask_len = seq_len
 
-    # Build index matrices
-    # i (Query): [0, 1, ..., L-1]
-    # j (Key):   [0, 1, ..., L-1]
-    indices = torch.arange(seq_len, device=device)
+    # 2. Build the Geometry Mask using perfect-size arange
+    # ------------------------------------------------------
+    # Since we are using fixed-shape conversion, seq_len and mask_len are constants.
+    # This avoids the 4096 broadcasting issues.
+    indices_q = torch.arange(seq_len, device=device).unsqueeze(1)
+    indices_k = torch.arange(mask_len, device=device).unsqueeze(0)
+    
     # diff = i - j
-    diff = indices.unsqueeze(1) - indices.unsqueeze(0)
+    diff = indices_q - indices_k
 
-    # Initialize all True (all positions visible)
-    valid_mask = torch.ones((seq_len, seq_len), device=device, dtype=torch.bool)
+    # Initialize mask as all True (boolean)
+    valid_mask = torch.ones_like(diff, dtype=torch.bool)
 
     # (A) Handle causality (Causal)
     if is_causal:
-        # i >= j  =>  diff >= 0
-        valid_mask = valid_mask & (diff >= 0)
+        valid_mask = torch.logical_and(valid_mask, (diff >= 0))
 
-    # (B) Handle sliding window
+    # (B) Handle sliding window (Sliding Window)
     if is_sliding_window and sliding_window is not None:
-        if is_causal:
-            # Causal sliding: only attend to past window steps
-            # i - j <= window  =>  diff <= window
-            # (diff >= 0 already handled above)
-            valid_mask = valid_mask & (diff <= sliding_window)
-        else:
-            # Bidirectional sliding: attend past and future window steps
-            # |i - j| <= window  =>  abs(diff) <= sliding_window
-            valid_mask = valid_mask & (torch.abs(diff) <= sliding_window)
+        valid_mask = torch.logical_and(valid_mask, (diff <= sliding_window))
 
-    # Expand dimensions to [1, 1, Seq_Len, Seq_Len] for broadcasting
-    valid_mask = valid_mask.unsqueeze(0).unsqueeze(0)
-
-    # ------------------------------------------------------
-    # 2. Apply padding mask (Key Masking)
-    # ------------------------------------------------------
+    # (C) Handle padding mask
     if attention_mask is not None:
-        # attention_mask shape: [Batch, Seq_Len] (1=valid, 0=padding)
-        # We want to mask out invalid keys (columns)
-        # Expand shape: [Batch, 1, 1, Seq_Len]
-        padding_mask_4d = attention_mask.view(attention_mask.shape[0], 1, 1, seq_len).to(torch.bool)
-        
-        # Broadcasting: Geometry Mask [1, 1, L, L] & Padding Mask [B, 1, 1, L]
-        # Result shape: [B, 1, L, L]
-        valid_mask = valid_mask & padding_mask_4d
+        # Slice to mask_len using narrow() for maximum conversion stability
+        p_mask = attention_mask.narrow(1, 0, mask_len).unsqueeze(1).unsqueeze(2).to(torch.bool)
+        # Broadcasting: valid_mask [seq, mask] & padding_mask [B, 1, 1, mask]
+        valid_mask = torch.logical_and(valid_mask, p_mask)
 
-    # ------------------------------------------------------
+    # Surgery for Core ML shape debugging
+    print(f"[DEBUG MASK] seq_len={seq_len}, mask_len={mask_len}, is_causal={is_causal}")
+    print(f"[DEBUG MASK] indices_q.shape={indices_q.shape}, indices_k.shape={indices_k.shape}")
+    print(f"[DEBUG MASK] valid_mask.shape={valid_mask.shape}")
+    
     # 3. Convert to additive mask
     # ------------------------------------------------------
-    # Get the minimal value for current dtype
     min_dtype = torch.finfo(dtype).min
+    # Use torch.where for robust tracer compatibility
+    zero = torch.tensor(0.0, dtype=dtype, device=device)
+    inf = torch.tensor(min_dtype, dtype=dtype, device=device)
+    mask_tensor = torch.where(valid_mask, zero, inf)
     
-    # Create result tensor filled with -inf by default
-    mask_tensor = torch.full(valid_mask.shape, min_dtype, dtype=dtype, device=device)
-    
-    # Set valid positions to 0.0
-    mask_tensor.masked_fill_(valid_mask, 0.0)
+    # Ensure 4D (either [B, 1, seq, mask] if padding mask used, or [1, 1, seq, mask] if not)
+    while mask_tensor.ndim < 4:
+        mask_tensor = mask_tensor.unsqueeze(0)
     
     return mask_tensor
 
@@ -191,8 +181,10 @@ def sample_t_r(batch_size, device, dtype, data_proportion=0.0, timestep_mu=-0.4,
     t, r = torch.maximum(t, r), torch.minimum(t, r)
     if not use_meanflow:
         data_proportion = 1.0
-    data_size = int(batch_size * data_proportion)
-    zero_mask = torch.arange(batch_size, device=device) < data_size
+    
+    # Avoid int() cast on tracers; use tensor comparison directly
+    data_size_bound = batch_size * data_proportion
+    zero_mask = torch.arange(batch_size, device=device) < data_size_bound
     r = torch.where(zero_mask, t, r)
     return t, r
 
@@ -1381,8 +1373,7 @@ class AceStepDiTModel(AceStepPreTrainedModel):
         # 初始化 Mask 变量
         full_attn_mask = None
         sliding_attn_mask = None
-        encoder_attention_mask = None
-        attention_mask = None
+        cross_attn_mask = None
         if is_flash_attn:
             # -------------------------------------------------------
             # 场景 A: Flash Attention 模式
@@ -1396,6 +1387,7 @@ class AceStepDiTModel(AceStepPreTrainedModel):
             # 这里的逻辑是：如果配置启用了滑动窗口，FA 模式下我们也只需要传基础的 padding mask
             # Layer 会自己决定是否调用带 sliding window 的 kernel
             sliding_attn_mask = attention_mask if self.config.use_sliding_window else None
+            cross_attn_mask = encoder_attention_mask
 
         else:
             # -------------------------------------------------------
@@ -1414,18 +1406,17 @@ class AceStepDiTModel(AceStepPreTrainedModel):
                 is_sliding_window=False,
                 is_causal=False                    # <--- 关键：双向注意力
             )
-            max_len = max(seq_len, encoder_seq_len)
-            
-            encoder_attention_mask = create_4d_mask(
-                seq_len=max_len,
+            # Generate cross-attention mask directly without max_len or slicing
+            cross_attn_mask = create_4d_mask(
+                seq_len=seq_len,
+                mask_len=encoder_seq_len,
                 dtype=dtype,
                 device=device,
-                attention_mask=attention_mask,     # [B, L]
+                attention_mask=encoder_attention_mask,     # [B, L]
                 sliding_window=None,
                 is_sliding_window=False,
                 is_causal=False                    # <--- 关键：双向注意力
             )
-            encoder_attention_mask = encoder_attention_mask[:, :, :seq_len, :encoder_seq_len]
             # 2. Sliding Attention (Bidirectional, Local)
             # 对应原来的 create_sliding_window... + bidirectional
             if self.config.use_sliding_window:
@@ -1443,7 +1434,7 @@ class AceStepDiTModel(AceStepPreTrainedModel):
         self_attn_mask_mapping = {
             "full_attention": full_attn_mask,
             "sliding_attention": sliding_attn_mask,
-            "encoder_attention_mask": encoder_attention_mask,
+            "encoder_attention_mask": cross_attn_mask,
         }
 
         # Create position embeddings to be shared across all decoder layers
@@ -1552,6 +1543,38 @@ class AceStepConditionEncoder(AceStepPreTrainedModel):
         encoder_hidden_states, encoder_attention_mask = pack_sequences(lyric_hidden_states, timbre_embs_unpack, lyric_attention_mask, timbre_embs_mask)
         encoder_hidden_states, encoder_attention_mask = pack_sequences(encoder_hidden_states, text_hidden_states, encoder_attention_mask, text_attention_mask)
         return encoder_hidden_states, encoder_attention_mask
+
+
+def _repaint_step_injection(xt, clean_src, mask, t_next, noise):
+    """Replace non-repaint regions of *xt* with noised source latents."""
+    zt = t_next * noise + (1.0 - t_next) * clean_src
+    m = mask.unsqueeze(-1).expand_as(xt)
+    return torch.where(m, xt, zt)
+
+
+def _repaint_boundary_blend(x_gen, clean_src, mask, cf_frames):
+    """Blend generated latents with source at repaint boundaries."""
+    soft = mask.float().clone()
+    if cf_frames <= 0:
+        m = soft.unsqueeze(-1).expand_as(x_gen)
+        return m * x_gen + (1.0 - m) * clean_src
+    B, T = mask.shape
+    for b in range(B):
+        row = mask[b]
+        if row.all() or not row.any():
+            continue
+        idx = torch.nonzero(row, as_tuple=False).squeeze(-1)
+        if idx.numel() == 0:
+            continue
+        left, right = idx[0].item(), idx[-1].item() + 1
+        fs = max(left - cf_frames, 0)
+        if left - fs > 0:
+            soft[b, fs:left] = torch.linspace(0, 1, left - fs + 2, device=soft.device)[1:-1]
+        fe = min(right + cf_frames, T)
+        if fe - right > 0:
+            soft[b, right:fe] = torch.linspace(1, 0, fe - right + 2, device=soft.device)[1:-1]
+    m = soft.unsqueeze(-1).expand_as(x_gen)
+    return m * x_gen + (1.0 - m) * clean_src
 
 
 class AceStepConditionGenerationModel(AceStepPreTrainedModel):
@@ -1809,6 +1832,10 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
         use_adg: bool = False,
         shift: float = 1.0,
         cover_noise_strength: float = 0.0,
+        repaint_mask: Optional[torch.Tensor] = None,
+        clean_src_latents: Optional[torch.FloatTensor] = None,
+        repaint_crossfade_frames: int = 10,
+        repaint_injection_ratio: float = 0.5,
         **kwargs,
     ):
         if attention_mask is None:
@@ -1971,14 +1998,27 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
                     pred_clean = self.get_x0_from_noise(xt, vt, t_curr_bsz)
                     next_timestep = 1.0 - (float(step_idx + 1) / infer_steps)
                     xt = self.renoise(pred_clean, next_timestep)
+                    t_after_step = next_timestep
                 elif infer_method == "ode":
                     # Ordinary Differential Equation: Euler method
                     # dx/dt = -v, so x_{t+1} = x_t - v_t * dt
                     dt = t_curr - t_prev
                     dt_tensor = dt * torch.ones((bsz,), device=device, dtype=dtype).unsqueeze(-1).unsqueeze(-1)
                     xt = xt - vt * dt_tensor
-        
+                    t_after_step = t_prev
+
+                injection_cutoff = round(repaint_injection_ratio * infer_steps)
+                if repaint_mask is not None and clean_src_latents is not None and step_idx < injection_cutoff:
+                    xt = _repaint_step_injection(
+                        xt, clean_src_latents, repaint_mask, t_after_step, noise,
+                    )
+
         x_gen = xt
+        if repaint_mask is not None and clean_src_latents is not None and repaint_crossfade_frames > 0:
+            x_gen = _repaint_boundary_blend(
+                x_gen, clean_src_latents, repaint_mask, repaint_crossfade_frames,
+            )
+
         end_time = time.time()
         time_costs["diffusion_time_cost"] = end_time - start_time
         time_costs["diffusion_per_step_time_cost"] = time_costs["diffusion_time_cost"] / infer_steps

@@ -2,6 +2,7 @@
 Gradio API Routes Module
 Add API endpoints compatible with api_server.py and CustomAceStep to Gradio application
 """
+import atexit
 import json
 import os
 import random
@@ -99,6 +100,15 @@ except ImportError:
 
 RESULT_EXPIRE_SECONDS = 7 * 24 * 60 * 60  # 7 days expiration
 RESULT_KEY_PREFIX = "ace_step_v1.5_"
+
+
+def _close_result_cache():
+    """Close the diskcache backend so pending writes are flushed on shutdown."""
+    if DISKCACHE_AVAILABLE and hasattr(_result_cache, "close"):
+        _result_cache.close()
+
+
+atexit.register(_close_result_cache)
 
 # =============================================================================
 # Example Data for Random Sample
@@ -466,6 +476,16 @@ async def release_task(request: Request, authorization: Optional[str] = Header(N
             lm_temperature=lm_temperature,
             lm_cfg_scale=float(get_param("lm_cfg_scale", default=2.0) or 2.0),
             lm_negative_prompt=get_param("lm_negative_prompt", default="NO USER INPUT") or "NO USER INPUT",
+            repaint_latent_crossfade_frames=int(
+                get_param("repaint_latent_crossfade_frames", default=10) or 10,
+            ),
+            repaint_wav_crossfade_sec=float(
+                get_param("repaint_wav_crossfade_sec", default=0.0) or 0.0,
+            ),
+            repaint_mode=get_param("repaint_mode", default="balanced") or "balanced",
+            repaint_strength=float(
+                get_param("repaint_strength", default=0.5) or 0.5,
+            ),
         )
 
         # Resolve seed(s) into List[int] for GenerationConfig.seeds

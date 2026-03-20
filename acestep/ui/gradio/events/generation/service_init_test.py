@@ -1,6 +1,8 @@
 """Unit tests for service_init.init_service_wrapper checkpoint path handling."""
 
+import importlib
 import os
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -124,6 +126,184 @@ class InitServiceWrapperPathTests(unittest.TestCase):
             f"Double nesting detected: {expected_checkpoints}",
         )
 
+
+class InitServiceWrapperDeviceResolutionTests(unittest.TestCase):
+    """Verify that 'auto' device is not written back to llm_handler when init_llm=False.
+
+    Regression test for: Auto-labelling broke after recent update if auto is
+    chosen for device.  When the user re-initialises the service without the
+    'Init LLM' checkbox ticked, the previously-resolved device (e.g. 'cuda')
+    must not be overwritten with the raw UI value 'auto'.
+    """
+
+    def _import_module(self):
+        """Import service_init lazily to avoid heavy transitive imports."""
+        from acestep.ui.gradio.events.generation import service_init
+        return service_init
+
+    @patch("acestep.ui.gradio.events.generation.service_init.get_global_gpu_config")
+    def test_reinit_without_llm_preserves_resolved_device(self, mock_gpu_config):
+        """Calling init_service_wrapper with init_llm=False must not overwrite llm_handler.device.
+
+        Scenario: LLM was previously initialized (llm_initialized=True, device='cuda').
+        User re-initialises the service (e.g. to change checkpoint) with init_llm=False
+        and device='auto'.  The LLM handler's resolved device must remain 'cuda'.
+        """
+        module = self._import_module()
+
+        mock_gpu_config.return_value = MagicMock(
+            available_lm_models=["acestep-5Hz-lm-1.7B"],
+            lm_backend_restriction=None,
+            tier="tier6",
+            gpu_memory_gb=24.0,
+            max_duration_with_lm=600,
+            max_duration_without_lm=600,
+            max_batch_size_with_lm=4,
+            max_batch_size_without_lm=8,
+        )
+
+        dit_handler = MagicMock()
+        dit_handler.initialize_service.return_value = ("ok", True)
+        dit_handler.model = MagicMock()
+        dit_handler.is_turbo_model.return_value = True
+
+        # Simulate LLM previously initialised with resolved device="cuda"
+        llm_handler = MagicMock()
+        llm_handler.llm_initialized = True
+        llm_handler.device = "cuda"  # previously resolved from "auto" -> "cuda"
+
+        module.init_service_wrapper(
+            dit_handler,
+            llm_handler,
+            "/some/project/checkpoints",
+            "acestep-v15-turbo",
+            "auto",   # raw UI value -- must NOT overwrite the resolved "cuda"
+            False,    # init_llm=False: do not re-initialize LLM
+            None,     # lm_model_path
+            "vllm",   # backend
+            use_flash_attention=False,
+            offload_to_cpu=False,
+            offload_dit_to_cpu=False,
+            compile_model=False,
+            quantization=False,
+        )
+
+        # llm_handler.initialize must NOT have been called (init_llm=False)
+        llm_handler.initialize.assert_not_called()
+        # The previously-resolved device must be preserved
+        self.assertEqual(
+            llm_handler.device,
+            "cuda",
+            "llm_handler.device must remain 'cuda' when init_llm=False, "
+            f"got '{llm_handler.device}' instead",
+        )
+
+    @patch("acestep.ui.gradio.events.generation.service_init.get_global_gpu_config")
+    def test_init_llm_with_auto_device_calls_initialize(self, mock_gpu_config):
+        """When init_llm=True and device='auto', initialize() must be called with 'auto' device.
+
+        The 'auto' -> concrete device resolution happens inside initialize(), so we
+        must pass 'auto' through correctly.
+        """
+        module = self._import_module()
+
+        mock_gpu_config.return_value = MagicMock(
+            available_lm_models=["acestep-5Hz-lm-1.7B"],
+            lm_backend_restriction=None,
+            tier="tier6",
+            gpu_memory_gb=24.0,
+            max_duration_with_lm=600,
+            max_duration_without_lm=600,
+            max_batch_size_with_lm=4,
+            max_batch_size_without_lm=8,
+        )
+
+        dit_handler = MagicMock()
+        dit_handler.initialize_service.return_value = ("ok", True)
+        dit_handler.model = MagicMock()
+        dit_handler.is_turbo_model.return_value = True
+
+        llm_handler = MagicMock()
+        llm_handler.llm_initialized = False
+        llm_handler.initialize.return_value = ("[OK] LLM initialized", True)
+
+        module.init_service_wrapper(
+            dit_handler,
+            llm_handler,
+            "/some/project/checkpoints",
+            "acestep-v15-turbo",
+            "auto",   # raw UI value
+            True,     # init_llm=True
+            "acestep-5Hz-lm-1.7B",
+            "pt",
+            use_flash_attention=False,
+            offload_to_cpu=False,
+            offload_dit_to_cpu=False,
+            compile_model=False,
+            quantization=False,
+        )
+
+        llm_handler.initialize.assert_called_once()
+        _, call_kwargs = llm_handler.initialize.call_args
+        self.assertEqual(
+            call_kwargs.get("device"),
+            "auto",
+            "initialize() must receive 'auto' so it can resolve to the best device",
+        )
+
+
+
+class QuantizationSelectionTests(unittest.TestCase):
+    """Verify pre-Ampere quantization mode selection."""
+
+    def _import_module(self):
+        """Import service_init lazily to avoid heavy transitive imports."""
+        from acestep.ui.gradio.events.generation import service_init
+        return service_init
+
+    def test_select_quantization_value_uses_dynamic_mode_for_pre_ampere_cuda(self):
+        """It selects ``w8a8_dynamic`` for pre-Ampere CUDA devices."""
+        module = self._import_module()
+
+        with patch("torch.cuda.is_available", return_value=True), \
+                patch("torch.cuda.get_device_capability", return_value=(6, 1)):
+            self.assertEqual(
+                module._select_quantization_value(
+                    quantization_enabled=True,
+                    device="cuda",
+                ),
+                "w8a8_dynamic",
+            )
+
+    def test_select_quantization_value_keeps_default_when_torch_import_fails(self):
+        """It keeps the default quantization when torch cannot be imported."""
+        module = importlib.import_module(
+            "acestep.ui.gradio.events.generation.service_init"
+        )
+        real_import = __import__
+        removed_torch_module = sys.modules.pop("torch", None)
+        removed_torch_nn_module = sys.modules.pop("torch.nn", None)
+
+        def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
+            """Raise ImportError only for torch imports from the helper."""
+            if name == "torch" or name.startswith("torch."):
+                raise ImportError("torch missing")
+            return real_import(name, globals_, locals_, fromlist, level)
+
+        try:
+            with patch("builtins.__import__", side_effect=fake_import):
+                self.assertEqual(
+                    module._select_quantization_value(
+                        quantization_enabled=True,
+                        device="cuda",
+                    ),
+                    "int8_weight_only",
+                )
+        finally:
+            if removed_torch_module is not None:
+                sys.modules["torch"] = removed_torch_module
+            if removed_torch_nn_module is not None:
+                sys.modules["torch.nn"] = removed_torch_nn_module
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,7 +44,10 @@ private let minLatentLength = 128
 public func latentLengthFromDuration(durationSeconds: Double, sampleRate: Int) -> Int {
     guard durationSeconds > 0 else { return defaultLatentLength }
     let samples = durationSeconds * Double(sampleRate)
-    let t = Int(ceil(samples / Double(vaeLatentToSamplesFactor)))
+    var t = Int(ceil(samples / Double(vaeLatentToSamplesFactor)))
+    if t % 2 != 0 {
+        t -= 1 // Ensure parity for patch_size=2 downsampling without dropping residuals in CoreML
+    }
     return max(minLatentLength, max(1, t))
 }
 
@@ -57,7 +60,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
     private let stepper: DiffusionStepper
     private let decoder: VAEDecoder
     private let sampleRate: Int
-    private let conditioningProvider: ConditioningProvider?
+    private var conditioningProvider: ConditioningProvider?
     public let maxDuration: Double
 
     public var isInitialized: Bool { true }
@@ -82,14 +85,34 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         self.maxDuration = maxDuration
     }
 
+    /// Replace the conditioning provider (e.g. after lazily loading cover models).
+    public func updateConditioningProvider(_ provider: ConditioningProvider?) {
+        self.conditioningProvider = provider
+    }
+
     public func run(params: GenerationParams, config: GenerationConfig, progress: ((Double, String) -> Void)?) async throws -> GenerationResult {
         let b = config.batchSize
         let t = latentLengthFromDuration(durationSeconds: params.duration, sampleRate: sampleRate)
-        let schedule = DiffusionSchedule.getTimestepSchedule(
+
+        var schedule = DiffusionSchedule.getTimestepSchedule(
             shift: params.shift,
             timesteps: params.timesteps,
             inferSteps: params.inferenceSteps > 0 ? params.inferenceSteps : nil
         )
+
+        // Cover noise blending: truncate schedule when coverNoiseStrength > 0.
+        // Python: effective_noise_level = 1 - cover_noise_strength, find nearest_t,
+        // truncate schedule to start from nearest_t.
+        if params.coverNoiseStrength > 0, !schedule.isEmpty {
+            let effectiveNoiseLevel = 1.0 - params.coverNoiseStrength
+            let nearestT = schedule.min(by: { abs($0 - effectiveNoiseLevel) < abs($1 - effectiveNoiseLevel) })!
+            if let startIdx = schedule.firstIndex(of: nearestT) {
+                let originalCount = schedule.count
+                schedule = Array(schedule[startIdx...])
+                print("[ContractGenerationPipeline] Cover noise: strength=\(params.coverNoiseStrength), effectiveNoiseLevel=\(effectiveNoiseLevel), nearestT=\(nearestT), steps \(originalCount)→\(schedule.count)")
+            }
+        }
+
         #if DEBUG
         if let firstT = schedule.first, let lastT = schedule.last {
             debugPrint("[GenerationDiagnostics] timestep_schedule count=\(schedule.count) first=\(formatStat(Float(firstT))) last=\(formatStat(Float(lastT)))")
@@ -109,10 +132,10 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             )
         }
         #endif
-        let usingDefaultConditions = (conditions.encoderHiddenStates == nil && conditions.contextLatents == nil)
-        if usingDefaultConditions && stepper is MLXDiTStepper {
+        if conditions.encoderHiddenStates == nil && (stepper is MLXDiTStepper || stepper is CoreMLDiTStepper) {
             throw ContractGenerationPipelineError.missingConditioning
         }
+        let usingDefaultConditions = (conditions.encoderHiddenStates == nil && conditions.contextLatents == nil)
         if usingDefaultConditions {
             // Python always passes real conditioning from prepare_condition (text/lyric/refer → encoder_hidden_states, context_latents).
             // Zeros produce unstructured/noise-like audio. App should provide a ConditioningProvider that returns real encoder + context.
@@ -137,9 +160,27 @@ public final class ContractGenerationPipeline: GenerationPipeline {
 
         MLX.GPU.clearCache()
         
+        // Mid-loop conditioning switch: Python switches from cover→text2music at step `cover_steps`
+        let coverSteps = params.audioCoverStrength < 1.0 ? Int(Double(schedule.count) * params.audioCoverStrength) : schedule.count
+        var switchedToNonCover = false
+        
         var apgMomentumState: [String: MLXArray]? = [:]
         for (stepIdx, timestepVal) in schedule.enumerated() {
+            print("[PipelineLoop] stepIdx=\(stepIdx) t=\(timestepVal)")
+            
+            // Switch to non-cover conditions at step `coverSteps` (Python: audio_cover_strength)
+            if stepIdx >= coverSteps, !switchedToNonCover, let nonCover = conditions.nonCoverConditions?.value {
+                switchedToNonCover = true
+                conditions.encoderHiddenStates = nonCover.encoderHiddenStates
+                conditions.encoderAttentionMask = nonCover.encoderAttentionMask
+                conditions.contextLatents = nonCover.contextLatents
+                // Reset APG momentum state on conditioning switch (matches Python KV cache reset)
+                apgMomentumState = [:]
+                print("[PipelineLoop] Switched to non-cover conditions at step \(stepIdx)/\(schedule.count)")
+            }
+            
             let nextT: Float? = (stepIdx + 1 < schedule.count) ? Float(schedule[stepIdx + 1]) : nil
+            let previousLatent = xt
             xt = runDiffusionStep(
                 currentLatent: xt,
                 timestep: Float(timestepVal),
@@ -150,9 +191,10 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             )
             #if DEBUG
             let stepStats = tensorMeanStd(xt)
-            let variance = stepStats.std * stepStats.std
+            let vtDiff = previousLatent - xt
+            let vtStats = tensorMeanStd(vtDiff)
             debugPrint(
-                "[GenerationDiagnostics] step=\(stepIdx + 1)/\(schedule.count) t=\(formatStat(Float(timestepVal))) latent_var=\(formatStat(variance)) mean=\(formatStat(stepStats.mean)) std=\(formatStat(stepStats.std))"
+                "[GenerationDiagnostics] step=\(stepIdx + 1)/\(schedule.count) t=\(formatStat(Float(timestepVal))) latent_mean=\(formatStat(stepStats.mean)) latent_std=\(formatStat(stepStats.std)) vtDiff_mean=\(formatStat(vtStats.mean)) vtDiff_std=\(formatStat(vtStats.std))"
             )
             #endif
             let frac = Double(stepIdx + 1) / Double(schedule.count)
@@ -169,7 +211,50 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             throw ContractGenerationPipelineError.invalidLatentShape(decodeLatent.shape)
         }
         #if DEBUG
-        debugPrint("[GenerationDiagnostics] decode_latent shape=\(decodeLatent.shape)")
+        if decodeLatent.ndim == 3 {
+            MLX.eval(decodeLatent) // Force evaluation for memory safety
+            let flatX = decodeLatent.asArray(Float.self)
+            let b = decodeLatent.dim(0)
+            let len = decodeLatent.dim(1)
+            let c = decodeLatent.dim(2)
+            if b == 1 && c == 64 && len > 0 {
+                var lSum: Float = 0
+                var rSum: Float = 0
+                for i in 0..<len {
+                    for j in 0..<32 { lSum += flatX[i * 64 + j] }
+                    for j in 32..<64 { rSum += flatX[i * 64 + j] }
+                }
+                let lMean = lSum / Float(len * 32)
+                let rMean = rSum / Float(len * 32)
+                
+                var num: Float = 0
+                var lDenom: Float = 0
+                var rDenom: Float = 0
+                
+                for i in 0..<len {
+                    for j in 0..<32 {
+                        let lVal = flatX[i * 64 + j]
+                        let rVal = flatX[i * 64 + j + 32]
+                        let lDiff = lVal - lMean
+                        let rDiff = rVal - rMean
+                        num += lDiff * rDiff
+                        lDenom += lDiff * lDiff
+                        rDenom += rDiff * rDiff
+                    }
+                }
+                let corr = num / sqrt(lDenom * rDenom)
+                debugPrint("[GenerationDiagnostics] decode_latent shape=\(decodeLatent.shape) L/R correlation=\(String(format: "%.6f", corr))")
+            }
+        }
+        do {
+            let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSTemporaryDirectory())
+            let npyURL = supportDir.appendingPathComponent("swift_latents.npy")
+            try MLX.save(array: decodeLatent, url: npyURL)
+            print("[DEBUG] Wrote swift_latents.npy to \(npyURL.path)")
+        } catch {
+            print("[DEBUG] Failed to write swift_latents.npy: \(error)")
+        }
         #endif
         var audio = decoder.decode(latent: decodeLatent)
         guard audio.ndim == 2 || audio.ndim == 3 else {
@@ -210,6 +295,9 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         MLX.GPU.clearCache()
 
         let audios = buildAudiosFromDecoded(audio)
+        // All audio data is now materialized into [Float] arrays — release the MLXArray references
+        // and clear the GPU cache so Metal buffers are freed immediately.
+        MLX.GPU.clearCache()
         progress?(1.0, "Done")
         return GenerationResult(
             audios: audios,
@@ -239,7 +327,10 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             contextLatents: try align("contextLatents", conditions.contextLatents),
             encoderAttentionMask: try align("encoderAttentionMask", conditions.encoderAttentionMask),
             nullConditionEmbedding: conditions.nullConditionEmbedding,
-            initialLatents: try align("initialLatents", conditions.initialLatents)
+            initialLatents: try align("initialLatents", conditions.initialLatents),
+            nonCoverConditions: conditions.nonCoverConditions != nil
+                ? try alignConditionsToBatch(conditions.nonCoverConditions!.value, batchSize: batchSize)
+                : nil
         )
     }
 
@@ -251,8 +342,8 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         params: GenerationParams,
         momentumState: inout [String: MLXArray]?
     ) -> MLXArray {
+        // Guidance criteria: scale > 1.0 and all required conditions for unconditioned branch exist.
         guard
-            let mlxStepper = stepper as? MLXDiTStepper,
             params.guidanceScale > 1.0,
             let nullCond = conditions.nullConditionEmbedding,
             let enc = conditions.encoderHiddenStates,
@@ -270,28 +361,55 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         let t = currentLatent.dim(1)
         let c = currentLatent.dim(2)
 
-        let xIn = concatenated([currentLatent, currentLatent], axis: 0)
-        let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
-        let encDoubled = concatenated([enc, nullExpanded], axis: 0)
-        let ctxDoubled = concatenated([ctx, ctx], axis: 0)
-        let maskDoubled: MLXArray? = conditions.encoderAttentionMask.map { concatenated([$0, $0], axis: 0) }
-        let cfgConditions = DiTConditions(
-            encoderHiddenStates: encDoubled,
-            contextLatents: ctxDoubled,
-            encoderAttentionMask: maskDoubled,
-            nullConditionEmbedding: nil,
-            initialLatents: nil
-        )
+        let predCond: MLXArray
+        let predUncond: MLXArray
 
-        let vtDoubled = mlxStepper.predictVelocity(
-            currentLatent: xIn,
-            timestep: timestep,
-            conditions: cfgConditions,
-            useCache: false
-        )
+        if let mlxStepper = stepper as? MLXDiTStepper {
+            // MLX Optimized Path: run shared forward pass with doubled batch [2*B, ...]
+            let xIn = concatenated([currentLatent, currentLatent], axis: 0)
+            let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
+            let encDoubled = concatenated([enc, nullExpanded], axis: 0)
+            let ctxDoubled = concatenated([ctx, ctx], axis: 0)
+            let maskDoubled: MLXArray? = conditions.encoderAttentionMask.map { concatenated([$0, $0], axis: 0) }
+            let cfgConditions = DiTConditions(
+                encoderHiddenStates: encDoubled,
+                contextLatents: ctxDoubled,
+                encoderAttentionMask: maskDoubled,
+                nullConditionEmbedding: nil,
+                initialLatents: nil
+            )
 
-        let predCond = vtDoubled[0..<b, 0..<t, 0..<c]
-        let predUncond = vtDoubled[b..<(b * 2), 0..<t, 0..<c]
+            let vtDoubled = mlxStepper.predictVelocity(
+                currentLatent: xIn,
+                timestep: timestep,
+                conditions: cfgConditions,
+                useCache: false // Cross-attention cache currently expects stable batch dimension
+            )
+            predCond = vtDoubled[0..<b, 0..<t, 0..<c]
+            predUncond = vtDoubled[b..<(b * 2), 0..<t, 0..<c]
+        } else {
+            // General Path (e.g. CoreML): run two sequential forward passes
+            // 1. Conditional branch
+            predCond = stepper.predictVelocity(
+                currentLatent: currentLatent,
+                timestep: timestep,
+                conditions: conditions,
+                useCache: true
+            )
+
+            // 2. Unconditional branch (using nullConditionEmbedding instead of normal encoder hidden states)
+            let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
+            var uncondConditions = conditions
+            uncondConditions.encoderHiddenStates = nullExpanded
+            
+            predUncond = stepper.predictVelocity(
+                currentLatent: currentLatent,
+                timestep: timestep,
+                conditions: uncondConditions,
+                useCache: true
+            )
+        }
+
         let applyCFG = params.cfgIntervalStart <= Double(timestep) && Double(timestep) <= params.cfgIntervalEnd
         let vt: MLXArray
         if applyCFG {
@@ -353,15 +471,34 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         guard shape.count >= 2 else { return [] }
         let b = shape[0]
         let channels = shape.count > 2 ? shape[2] : 1
-        let samplesPerBatch = shape.count > 2 ? (shape[1] * shape[2]) : shape[1]
+        let samplesPerBatch = shape.count > 2 ? shape[1] : shape[1]
+        
         var result: [[String: Any]] = []
-        let floats = audio.asArray(Float.self)
-        let total = b * samplesPerBatch
-        guard floats.count >= total else { return [] }
+        
         for i in 0..<b {
-            let start = i * samplesPerBatch
-            let end = start + samplesPerBatch
-            let slice = Array(floats[start..<end])
+            let bIndex = i..<(i + 1)
+            let tIndex = 0..<samplesPerBatch
+            
+            let slice: [Float]
+            if channels == 2 {
+                let leftNode = audio[bIndex, tIndex, 0..<1].squeezed().contiguous()
+                let rightNode = audio[bIndex, tIndex, 1..<2].squeezed().contiguous()
+                MLX.eval(leftNode, rightNode)
+                let leftChannel = leftNode.asArray(Float.self)
+                let rightChannel = rightNode.asArray(Float.self)
+                
+                var interleaved = [Float](repeating: 0, count: samplesPerBatch * 2)
+                for f in 0..<samplesPerBatch {
+                    interleaved[f * 2] = leftChannel[f]
+                    interleaved[f * 2 + 1] = rightChannel[f]
+                }
+                slice = interleaved
+            } else {
+                let monoNode = audio[bIndex, tIndex].squeezed().contiguous()
+                MLX.eval(monoNode)
+                slice = monoNode.asArray(Float.self)
+            }
+            
             #if DEBUG
             if channels == 2 && slice.count >= 4 {
                 var leftInterleaved: [Float] = []

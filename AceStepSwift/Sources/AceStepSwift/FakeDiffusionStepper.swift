@@ -10,9 +10,25 @@ import MLX
 public final class FakeDiffusionStepper: DiffusionStepper {
     public init() {}
 
-    public func step(currentLatent: MLXArray, timestep: Float, conditions: DiTConditions, nextTimestep: Float?) -> MLXArray {
+    public func predictVelocity(currentLatent: MLXArray, timestep: Float, conditions: DiTConditions, useCache: Bool) -> MLXArray {
         let shape = currentLatent.shape
         let count = shape.reduce(1, *)
         return MLXArray([Float](repeating: 0, count: count), shape)
+    }
+
+    public func step(currentLatent: MLXArray, timestep: Float, conditions: DiTConditions, nextTimestep: Float?) -> MLXArray {
+        let vt = predictVelocity(
+            currentLatent: currentLatent,
+            timestep: timestep,
+            conditions: conditions,
+            useCache: true
+        )
+        
+        if let nextT = nextTimestep {
+            let dt = timestep - nextT
+            return currentLatent - vt * dt
+        } else {
+            return currentLatent - vt * timestep
+        }
     }
 }

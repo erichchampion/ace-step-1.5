@@ -9,6 +9,7 @@ public enum TaskType: String, CaseIterable {
     case lego
     case extract
     case complete
+    case visualize
 
     public init?(string: String) {
         let lower = string.lowercased()

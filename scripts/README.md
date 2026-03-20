@@ -26,7 +26,7 @@ source .venv/bin/activate
 With the venv activated and from the **repository root**:
 
 ```bash
-pip install -r requirements.txt
+uv pip install --index-strategy unsafe-best-match --upgrade -r requirements.txt
 ```
 
 This installs PyTorch and everything needed for `generate_audio.py` and `validate_audio.py` (e.g. `soundfile` or `scipy` for WAV validation). The smoke test runs Python from the repo root so the `acestep` package is found via `sys.path`; optionally install the tree in editable mode with `pip install -e .` so `acestep` is available from any working directory.

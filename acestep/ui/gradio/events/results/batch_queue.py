@@ -6,6 +6,7 @@ parameters for navigation, replay, and AutoGen workflows.
 import datetime
 
 import gradio as gr
+import torch
 
 from acestep.ui.gradio.i18n import t
 
@@ -45,6 +46,14 @@ def store_batch_in_queue(
     Returns:
         The updated *batch_queue*.
     """
+    prev_index = batch_index - 1
+    if prev_index in batch_queue:
+        old_extra = batch_queue[prev_index].get("extra_outputs", {})
+        for k, v in old_extra.items():
+            if isinstance(v, torch.Tensor) and v.is_cuda:
+                # Offload to CPU to free VRAM; data is preserved for potential re-scoring.
+                old_extra[k] = v.cpu()
+
     batch_queue[batch_index] = {
         "status": status,
         "audio_paths": audio_paths,
@@ -90,6 +99,7 @@ def capture_current_params(
     score_scale, lm_batch_chunk_size,
     track_name, complete_track_classes,
     enable_normalization, normalization_db,
+    fade_in_duration, fade_out_duration,
     latent_shift, latent_rescale,
 ):
     """Capture current UI parameters for next-batch generation.
@@ -144,6 +154,8 @@ def capture_current_params(
         "complete_track_classes": complete_track_classes,
         "enable_normalization": enable_normalization,
         "normalization_db": normalization_db,
+        "fade_in_duration": fade_in_duration,
+        "fade_out_duration": fade_out_duration,
         "latent_shift": latent_shift,
         "latent_rescale": latent_rescale,
     }
@@ -161,7 +173,7 @@ def restore_batch_parameters(current_batch_index, batch_queue):
     """
     if current_batch_index not in batch_queue:
         gr.Warning(t("messages.no_batch_data"))
-        return [gr.update()] * 20
+        return [gr.update()] * 26
 
     batch_data = batch_queue[current_batch_index]
     params = batch_data.get("generation_params", {})
@@ -187,6 +199,8 @@ def restore_batch_parameters(current_batch_index, batch_queue):
     complete_track_classes = params.get("complete_track_classes", [])
     enable_normalization = params.get("enable_normalization", True)
     normalization_db = params.get("normalization_db", -1.0)
+    fade_in_duration = params.get("fade_in_duration", 0.0)
+    fade_out_duration = params.get("fade_out_duration", 0.0)
     latent_shift = params.get("latent_shift", 0.0)
     latent_rescale = params.get("latent_rescale", 1.0)
 
@@ -205,5 +219,6 @@ def restore_batch_parameters(current_batch_index, batch_queue):
         use_cot_caption, use_cot_language, allow_lm_batch,
         track_name, complete_track_classes,
         enable_normalization, normalization_db,
+        fade_in_duration, fade_out_duration,
         latent_shift, latent_rescale,
     )

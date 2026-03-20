@@ -58,6 +58,7 @@ def create_4d_mask(
     sliding_window: Optional[int] = None,
     is_sliding_window: bool = False,
     is_causal: bool = True,
+    mask_len: Optional[int] = None,
 ) -> torch.Tensor:
     """
     General 4D Attention Mask generator compatible with CPU/Mac/SDPA and Eager mode.
@@ -68,21 +69,25 @@ def create_4d_mask(
     4. Bidirectional Sliding: is_causal=False, is_sliding_window=True (Longformer local)
 
     Returns:
-        [Batch, 1, Seq_Len, Seq_Len] additive mask (0.0 for keep, -inf for mask)
+        [Batch, 1, Seq_Len, Mask_Len] additive mask (0.0 for keep, -inf for mask)
     """
+    if mask_len is None:
+        mask_len = seq_len
+
     # ------------------------------------------------------
-    # 1. Construct basic geometry mask [Seq_Len, Seq_Len]
+    # 1. Construct basic geometry mask [Seq_Len, Mask_Len]
     # ------------------------------------------------------
 
     # Build index matrices
-    # i (Query): [0, 1, ..., L-1]
-    # j (Key):   [0, 1, ..., L-1]
-    indices = torch.arange(seq_len, device=device)
+    # i (Query): [0, 1, ..., seq_len-1]
+    # j (Key):   [0, 1, ..., mask_len-1]
+    queries = torch.arange(seq_len, device=device)
+    keys = torch.arange(mask_len, device=device)
     # diff = i - j
-    diff = indices.unsqueeze(1) - indices.unsqueeze(0)
+    diff = queries.unsqueeze(1) - keys.unsqueeze(0)
 
     # Initialize all True (all positions visible)
-    valid_mask = torch.ones((seq_len, seq_len), device=device, dtype=torch.bool)
+    valid_mask = torch.ones((seq_len, mask_len), device=device, dtype=torch.bool)
 
     # (A) Handle causality (Causal)
     if is_causal:
@@ -1413,16 +1418,18 @@ class AceStepDiTModel(AceStepPreTrainedModel):
             )
             max_len = max(seq_len, encoder_seq_len)
             
+            # Encoder attention mask needs to match the target sequence length
+            # and attend to the encoder sequence length
             encoder_attention_mask = create_4d_mask(
-                seq_len=max_len,
+                seq_len=seq_len,
                 dtype=dtype,
                 device=device,
                 attention_mask=attention_mask,     # [B, L]
                 sliding_window=None,
                 is_sliding_window=False,
-                is_causal=False                    # <--- 关键：双向注意力
+                is_causal=False,
+                mask_len=encoder_seq_len
             )
-            encoder_attention_mask = encoder_attention_mask[:, :, :seq_len, :encoder_seq_len]
             # 2. Sliding Attention (Bidirectional, Local)
             # 对应原来的 create_sliding_window... + bidirectional
             if self.config.use_sliding_window:
@@ -1549,6 +1556,38 @@ class AceStepConditionEncoder(AceStepPreTrainedModel):
         encoder_hidden_states, encoder_attention_mask = pack_sequences(lyric_hidden_states, timbre_embs_unpack, lyric_attention_mask, timbre_embs_mask)
         encoder_hidden_states, encoder_attention_mask = pack_sequences(encoder_hidden_states, text_hidden_states, encoder_attention_mask, text_attention_mask)
         return encoder_hidden_states, encoder_attention_mask
+
+
+def _repaint_step_injection(xt, clean_src, mask, t_next, noise):
+    """Replace non-repaint regions of *xt* with noised source latents."""
+    zt = t_next * noise + (1.0 - t_next) * clean_src
+    m = mask.unsqueeze(-1).expand_as(xt)
+    return torch.where(m, xt, zt)
+
+
+def _repaint_boundary_blend(x_gen, clean_src, mask, cf_frames):
+    """Blend generated latents with source at repaint boundaries."""
+    soft = mask.float().clone()
+    if cf_frames <= 0:
+        m = soft.unsqueeze(-1).expand_as(x_gen)
+        return m * x_gen + (1.0 - m) * clean_src
+    B, T = mask.shape
+    for b in range(B):
+        row = mask[b]
+        if row.all() or not row.any():
+            continue
+        idx = torch.nonzero(row, as_tuple=False).squeeze(-1)
+        if idx.numel() == 0:
+            continue
+        left, right = idx[0].item(), idx[-1].item() + 1
+        fs = max(left - cf_frames, 0)
+        if left - fs > 0:
+            soft[b, fs:left] = torch.linspace(0, 1, left - fs + 2, device=soft.device)[1:-1]
+        fe = min(right + cf_frames, T)
+        if fe - right > 0:
+            soft[b, right:fe] = torch.linspace(1, 0, fe - right + 2, device=soft.device)[1:-1]
+    m = soft.unsqueeze(-1).expand_as(x_gen)
+    return m * x_gen + (1.0 - m) * clean_src
 
 
 class AceStepConditionGenerationModel(AceStepPreTrainedModel):
@@ -1802,6 +1841,10 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
         shift: float = 3.0,
         timesteps: Optional[torch.Tensor] = None,
         cover_noise_strength: float = 0.0,
+        repaint_mask: Optional[torch.Tensor] = None,
+        clean_src_latents: Optional[torch.FloatTensor] = None,
+        repaint_crossfade_frames: int = 10,
+        repaint_injection_ratio: float = 0.5,
         **kwargs,
     ):
         # Valid shifts: only discrete values 1, 2, 3 are supported
@@ -1914,7 +1957,9 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
         time_costs["encoder_time_cost"] = end_time - start_time
         start_time = end_time
         
+        import os
         noise = self.prepare_noise(context_latents, seed)
+        torch.save(noise.detach().cpu(), os.path.abspath("pytorch_initial_noise_turbo.pt"))
         bsz, device, dtype = context_latents.shape[0], context_latents.device, context_latents.dtype
         past_key_values = EncoderDecoderCache(DynamicCache(), DynamicCache())
         
@@ -1971,6 +2016,8 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
             vt = decoder_outputs[0]
             past_key_values = decoder_outputs[1]
             
+            print(f"[Python] predictVelocity t={t_curr_tensor[0].item():.4f} mean={vt.mean().item():.8f} shape={list(encoder_hidden_states.shape)}")
+            
             # On final step, directly compute x0 from noise
             if step_idx == num_steps - 1:
                 xt = self.get_x0_from_noise(xt, vt, t_curr_tensor)
@@ -1982,6 +2029,7 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
                 pred_clean = self.get_x0_from_noise(xt, vt, t_curr_tensor)
                 next_timestep = t_schedule[step_idx + 1].item()
                 xt = self.renoise(pred_clean, next_timestep)
+                t_after_step = next_timestep
             elif infer_method == "ode":
                 # Ordinary Differential Equation: Euler method
                 # dx/dt = -v, so x_{t+1} = x_t - v_t * dt
@@ -1989,8 +2037,19 @@ class AceStepConditionGenerationModel(AceStepPreTrainedModel):
                 dt = current_timestep - next_timestep
                 dt_tensor = dt * torch.ones((bsz,), device=device, dtype=dtype).unsqueeze(-1).unsqueeze(-1)
                 xt = xt - vt * dt_tensor
+                t_after_step = next_timestep
+
+            injection_cutoff = round(repaint_injection_ratio * num_steps)
+            if repaint_mask is not None and clean_src_latents is not None and step_idx < injection_cutoff:
+                xt = _repaint_step_injection(
+                    xt, clean_src_latents, repaint_mask, t_after_step, noise,
+                )
         
         x_gen = xt
+        if repaint_mask is not None and clean_src_latents is not None and repaint_crossfade_frames > 0:
+            x_gen = _repaint_boundary_blend(
+                x_gen, clean_src_latents, repaint_mask, repaint_crossfade_frames,
+            )
         end_time = time.time()
         time_costs["diffusion_time_cost"] = end_time - start_time
         time_costs["diffusion_per_step_time_cost"] = time_costs["diffusion_time_cost"] / num_steps

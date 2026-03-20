@@ -1,0 +1,5 @@
+Model Inputs:
+- input_ids: input_ids : MultiArray (Int32, 1 × 128)
+- attention_mask: attention_mask : MultiArray (Int32, 1 × 128)
+Model Outputs:
+- hidden_states: hidden_states : MultiArray (Float16, )

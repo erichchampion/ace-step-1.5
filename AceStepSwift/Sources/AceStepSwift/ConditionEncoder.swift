@@ -9,7 +9,7 @@ import MLX
 import MLXNN
 
 /// Config for the condition encoder. Matches Python AceStepConfig encoder-related fields.
-public struct ConditionEncoderConfig {
+public struct ConditionEncoderConfig: Sendable {
     public var textHiddenDim: Int
     public var hiddenSize: Int
     public var timbreHiddenDim: Int
@@ -97,6 +97,7 @@ public class ConditionEncoder: Module {
             }
             let lyricOut = lyricEncoder.call(inputsEmbeds: lyricHiddenStates!, attentionMask: lyricAttentionMask!)
             let (timbreOut, timbreMask) = timbreEncoder.call(referAudioPacked: referAudioPacked!, referAudioOrderMask: referAudioOrderMask!)
+
             return packSequences(hidden1: lyricOut, hidden2: timbreOut, mask1: lyricAttentionMask!, mask2: timbreMask)
         }()
 

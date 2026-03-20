@@ -243,7 +243,12 @@ gradio_outputs/
 acestep/third_parts/vllm/
 test_lora_scale_fix.py
 lokr_output/
+.claude/skills/acestep/scripts/config.json
+.claude/skills/acestep/scripts/.first_gen_done
+.claude/skills/acestep-simplemv/scripts/public/
+config.json
 
+acestep_output/
 # macOS
 .DS_Store
 
@@ -257,6 +262,11 @@ AceStepSwift/.swiftpm/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
-generation_smoke_output/conditioning/context_latents.bin
-generation_smoke_output/conditioning/encoder_hidden_states.bin
-generation_smoke_output/conditioning/initial_noise.bin
+generation_smoke_output/
+quantized_checkpoints_coreml/
+!quantized_checkpoints_coreml/hf-upload.sh
+debug*.txt
+mlx_tokenizer_export/audio_detokenizer/audio_detokenizer.safetensors
+mlx_tokenizer_export/audio_detokenizer/tokenizer_config.json
+mlx_tokenizer_export/audio_tokenizer/audio_tokenizer.safetensors
+mlx_tokenizer_export/audio_tokenizer/tokenizer_config.json

@@ -49,6 +49,8 @@ public enum TaskInstructions {
         case .complete:
             if let classes = completeTrackClasses, !classes.isEmpty { return complete(trackClasses: classes) }
             return completeDefault
+        case .visualize:
+            return "" // UI-only mode, not used for generation
         }
     }
 }

@@ -166,6 +166,15 @@ final class GenerationSmokeTests: XCTestCase {
             ? ctx
             : ctx[0..<1, 0..<latentLength, 0..<128]
         var conditions = DiTConditions(encoderHiddenStates: enc, contextLatents: contextSlice)
+        
+        let nullURL = base.appendingPathComponent("null_condition_embedding.bin")
+        if FileManager.default.fileExists(atPath: nullURL.path),
+           let nullCond = loadFloat32Array(from: nullURL.path),
+           nullCond.ndim == 3, nullCond.dim(0) == 1, nullCond.dim(1) == 1 {
+            conditions.nullConditionEmbedding = nullCond
+            print("[SmokeTest] Loaded null_condition_embedding.bin: shape=\(nullCond.shape)")
+        }
+
         let noiseURL = base.appendingPathComponent("initial_noise.bin")
         if FileManager.default.fileExists(atPath: noiseURL.path),
            let noise = loadFloat32Array(from: noiseURL.path),
