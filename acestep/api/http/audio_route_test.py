@@ -20,7 +20,11 @@ def _get_endpoint(app: FastAPI, path: str, method: str):
     """Return endpoint callable matching route path and method."""
 
     for route in app.routes:
-        if isinstance(route, APIRoute) and route.path == path and method.upper() in route.methods:
+        if (
+            isinstance(route, APIRoute)
+            and route.path == path
+            and method.upper() in route.methods
+        ):
             return route.endpoint
     raise AssertionError(f"Missing route: {method} {path}")
 
@@ -54,7 +58,7 @@ class AudioRouteTests(unittest.TestCase):
         request = type("Req", (), {"app": app})()
 
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(endpoint(path=str(allowed_dir / "missing.mp3"), request=request, _=None))
+            asyncio.run(endpoint(path="missing.mp3", request=request, _=None))
         self.assertEqual(404, ctx.exception.status_code)
 
     def test_returns_404_for_directory_target(self):
@@ -67,7 +71,7 @@ class AudioRouteTests(unittest.TestCase):
         request = type("Req", (), {"app": app})()
 
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(endpoint(path=str(Path.cwd()), request=request, _=None))
+            asyncio.run(endpoint(path=".", request=request, _=None))
         self.assertEqual(404, ctx.exception.status_code)
 
 

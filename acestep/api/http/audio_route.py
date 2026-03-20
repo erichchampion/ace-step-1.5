@@ -23,15 +23,28 @@ def register_audio_route(
         # Disallow absolute paths from the client outright.
         user_path = Path(path)
         if user_path.is_absolute():
-            raise HTTPException(status_code=403, detail="Access denied: absolute paths are not allowed")
+            raise HTTPException(
+                status_code=403, detail="Access denied: absolute paths are not allowed"
+            )
 
-        # Resolve the allowed directory and construct the final path relative to it.
-        resolved_path = (allowed_dir / path).resolve(strict=False)
-        resolved_path = (allowed_dir / user_path).resolve(strict=False)
+        # Get allowed directory from app state.
+        allowed_dir = Path(request.app.state.temp_audio_dir)
+
+        # Construct the path and validate it's within allowed directory BEFORE resolving.
+        # This prevents path traversal attacks (e.g., ../../etc/passwd).
+        candidate_path = allowed_dir / user_path
+        try:
+            resolved_path = candidate_path.resolve(strict=True)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Audio file not found")
+        except (OSError, RuntimeError):
+            raise HTTPException(status_code=400, detail="Invalid path")
         try:
             resolved_path.relative_to(allowed_dir)
         except ValueError:
-            raise HTTPException(status_code=403, detail="Access denied: path outside allowed directory")
+            raise HTTPException(
+                status_code=403, detail="Access denied: path outside allowed directory"
+            )
         if not resolved_path.is_file():
             raise HTTPException(status_code=404, detail="Audio file not found")
 
@@ -42,4 +55,6 @@ def register_audio_route(
             ".flac": "audio/flac",
             ".ogg": "audio/ogg",
         }
-        return FileResponse(str(resolved_path), media_type=media_types.get(ext, "audio/mpeg"))
+        return FileResponse(
+            str(resolved_path), media_type=media_types.get(ext, "audio/mpeg")
+        )
