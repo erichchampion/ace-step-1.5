@@ -29,9 +29,6 @@ private enum ContractGenerationPipelineError: LocalizedError {
     }
 }
 
-/// Default latent time dimension when duration is invalid or not set.
-private let defaultLatentLength = 100
-
 /// Latent channel dimension (DiT/VAE).
 private let latentChannels = 64
 
@@ -39,11 +36,11 @@ private let latentChannels = 64
 private let minLatentLength = 128
 
 /// Returns latent time steps T from duration (seconds) and sample rate.
-/// If duration <= 0, returns defaultLatentLength. Uses at least minLatentLength so short clips
-/// match Python's padded length and precomputed conditioning (e.g. 128 frames) fits. Exposed for testing.
+/// If duration <= 0, uses `AceStepConstants.autoDuration` as fallback (matches Python's auto-duration behavior).
+/// Uses at least minLatentLength so short clips match Python's padded length. Exposed for testing.
 public func latentLengthFromDuration(durationSeconds: Double, sampleRate: Int) -> Int {
-    guard durationSeconds > 0 else { return defaultLatentLength }
-    let samples = durationSeconds * Double(sampleRate)
+    let effectiveDuration = durationSeconds > 0 ? durationSeconds : AceStepConstants.autoDuration
+    let samples = effectiveDuration * Double(sampleRate)
     var t = Int(ceil(samples / Double(vaeLatentToSamplesFactor)))
     if t % 2 != 0 {
         t -= 1 // Ensure parity for patch_size=2 downsampling without dropping residuals in CoreML

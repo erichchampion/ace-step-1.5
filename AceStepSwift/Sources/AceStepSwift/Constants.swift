@@ -10,6 +10,10 @@ public enum AceStepConstants {
     public static let durationMax = 600
     /// Default audio sample rate (Hz). Matches Python handler.
     public static let defaultSampleRate = 48000
+    /// Fallback duration (seconds) when user selects "Auto" (duration ≤ 0).
+    /// Python's LLM resolves auto-duration via CoT; without LLM, Python uses random(10…120).
+    /// We use a deterministic 30s default that works on all device tiers.
+    public static let autoDuration: Double = 30.0
 
     public static let validTimeSignatures: [Int] = [2, 3, 4, 6]
 

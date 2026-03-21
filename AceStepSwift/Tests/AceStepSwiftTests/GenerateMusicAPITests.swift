@@ -52,9 +52,12 @@ final class GenerateMusicAPITests: XCTestCase {
         XCTAssertEqual(t, max(1, expected))
     }
 
-    func testLatentLengthFromDurationZeroReturnsDefault() {
+    func testLatentLengthFromDurationZeroUsesAutoDuration() {
         let t = latentLengthFromDuration(durationSeconds: 0, sampleRate: 48000)
-        XCTAssertEqual(t, 100)
+        // Should use AceStepConstants.autoDuration (30s), not an arbitrary small default
+        let expected = latentLengthFromDuration(durationSeconds: AceStepConstants.autoDuration, sampleRate: 48000)
+        XCTAssertEqual(t, expected)
+        XCTAssertGreaterThan(t, 128, "Auto-duration should produce more than minLatentLength frames")
     }
 
     /// ContractGenerationPipeline with fake stepper/decoder returns success and non-empty audios.
