@@ -40,7 +40,7 @@ final class GenerationSmokeTests: XCTestCase {
     }
 
     /// Loaded silence latent from DiT checkpoint for source latents (text2music requires this for meaningful output).
-    private static var loadedSilenceLatent: MLXArray?
+    nonisolated(unsafe) private static var loadedSilenceLatent: MLXArray?
 
     /// Initialize silence latent from DIT_WEIGHTS_PATH when available.
     private static func initializeSilenceLatent() {
