@@ -83,6 +83,12 @@ public final class MLXLLMFormatProvider: LLMFormatProvider {
         container = nil
     }
 
+    /// Python: DEFAULT_LM_INSTRUCTION = "Generate audio semantic tokens based on the given conditions:"
+    private static let formatSystemPrompt = "# Instruction\nGenerate audio semantic tokens based on the given conditions:\n\n"
+
+    /// Python: DEFAULT_LM_INSPIRED_INSTRUCTION = "Expand the user's input into a more detailed and specific musical description:"
+    private static let inspirationSystemPrompt = "# Instruction\nExpand the user's input into a more detailed and specific musical description:\n\n"
+
     public func generateFormat(
         caption: String,
         lyrics: String,
@@ -98,7 +104,7 @@ public final class MLXLLMFormatProvider: LLMFormatProvider {
             topP: 0.9
         )
         let prompt = buildFormatPrompt(caption: caption, lyrics: lyrics)
-        let session = ChatSession(container, generateParameters: params)
+        let session = ChatSession(container, instructions: Self.formatSystemPrompt, generateParameters: params)
         return try await session.respond(to: prompt)
     }
 
@@ -117,49 +123,22 @@ public final class MLXLLMFormatProvider: LLMFormatProvider {
             topP: 0.9
         )
         let prompt = buildInspirationPrompt(query: query, instrumental: instrumental)
-        let session = ChatSession(container, generateParameters: params)
+        let session = ChatSession(container, instructions: Self.inspirationSystemPrompt, generateParameters: params)
         return try await session.respond(to: prompt)
     }
 
+    /// User message for inspiration mode.
+    /// Python: f"{query}\n\ninstrumental: {instrumental_str}"
     private func buildInspirationPrompt(query: String, instrumental: Bool) -> String {
         let q = query.trimmingCharacters(in: .whitespaces).isEmpty ? "NO USER INPUT" : query
         let inst = instrumental ? "true" : "false"
-        return """
-        # Instruction
-        Expand the user's input into a more detailed and specific musical description.
-        Output exactly in this format inside a <think> block:
-        <think>
-        bpm: [30-300]
-        caption: [one sentence description ending with a period]
-        duration: [10-600]
-        keyscale: [e.g. C major or Am]
-        language: [e.g. en, zh, ja]
-        timesignature: [2, 3, 4, or 6]
-        </think>
-
-        \(q)
-
-        instrumental: \(inst)
-        """
+        return "\(q)\n\ninstrumental: \(inst)"
     }
 
+    /// User message for format mode.
+    /// Python: f"# Caption\n{caption}\n\n# Lyric\n{lyrics}\n"
     private func buildFormatPrompt(caption: String, lyrics: String) -> String {
-        """
-        Format the following music caption and lyrics into structured metadata.
-        Output exactly in this format inside a <think> block:
-        <think>
-        bpm: [30-300]
-        caption: [one sentence description ending with a period]
-        duration: [10-600]
-        keyscale: [e.g. C major or Am]
-        language: [e.g. en, zh, ja]
-        timesignature: [2, 3, 4, or 6]
-        </think>
-
-        Caption: \(caption)
-        Lyrics:
-        \(lyrics)
-        """
+        "# Caption\n\(caption)\n\n# Lyric\n\(lyrics)\n"
     }
 }
 

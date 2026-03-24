@@ -159,9 +159,7 @@ public enum LyricSegmenter {
                 let prevSection = sections[prevLast]
                 let nonEmptyLines = prevSection.lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                 if let lastLine = nonEmptyLines.last {
-                    parts.append("# (continued)")
                     parts.append(lastLine)
-                    parts.append("")
                 }
             }
 
@@ -178,8 +176,6 @@ public enum LyricSegmenter {
                 let nextSection = sections[nextFirst]
                 let nonEmptyLines = nextSection.lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                 if let firstLine = nonEmptyLines.first {
-                    parts.append("")
-                    parts.append("# (continues)")
                     parts.append(firstLine)
                 }
             }
@@ -234,17 +230,13 @@ public enum LyricSegmenter {
 
             // Context: last line from previous chunk
             if cIdx > 0 && startLine > 0 {
-                parts.append("# (continued)")
                 parts.append(lines[startLine - 1])
-                parts.append("")
             }
 
             parts.append(contentsOf: chunkLines)
 
             // Context: first line of next chunk
             if cIdx < chunks.count - 1 && endLine < totalLines {
-                parts.append("")
-                parts.append("# (continues)")
                 parts.append(lines[endLine])
             }
 

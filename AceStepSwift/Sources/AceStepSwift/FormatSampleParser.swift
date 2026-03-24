@@ -68,14 +68,9 @@ public enum FormatSampleParser {
         guard let range = outputText.range(of: tag) else { return "" }
         var after = String(outputText[range.upperBound...]).trimmingCharacters(in: .whitespaces)
         if after.isEmpty { return "" }
-        let dropHeader: (String) -> String = { s in
-            guard let r = s.range(of: "\n") else { return s }
-            return String(s[r.upperBound...]).trimmingCharacters(in: .whitespaces)
-        }
-        if after.lowercased().hasPrefix("# lyric") {
-            after = dropHeader(after)
-        } else if after.lowercased().hasPrefix("# lyrics") {
-            after = dropHeader(after)
+        // Strip "# Lyric" / "# Lyrics" header with flexible whitespace (matches Python regex)
+        if let range = after.range(of: #"^#\s*lyrics?\s*\n"#, options: [.regularExpression, .caseInsensitive]) {
+            after = String(after[range.upperBound...]).trimmingCharacters(in: .whitespaces)
         }
         if let imEnd = after.range(of: "<|im_end|>") {
             after = String(after[..<imEnd.lowerBound]).trimmingCharacters(in: .whitespaces)
