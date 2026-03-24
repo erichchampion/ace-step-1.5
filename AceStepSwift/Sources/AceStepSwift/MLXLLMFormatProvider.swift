@@ -3,7 +3,11 @@
  */
 
 import Foundation
+import MLX
+import MLXNN
 import MLXLMCommon
+import MLXLLM
+import Tokenizers
 
 public final class MLXLLMFormatProvider: LLMFormatProvider {
 
@@ -16,11 +20,54 @@ public final class MLXLLMFormatProvider: LLMFormatProvider {
     }
 
     /// Load model from a local directory (config.json + weights).
+    /// Falls back to manual prefix-mapped loading when the safetensors keys
+    /// lack the `model.` prefix expected by the Swift Qwen3Model struct.
     public func load(from directory: URL) async throws {
-        container = try await loadModelContainer(
-            directory: directory,
-            progressHandler: { _ in }
+        do {
+            container = try await loadModelContainer(
+                directory: directory,
+                progressHandler: { _ in }
+            )
+        } catch {
+            // Standard loadModelContainer fails for ACE-Step LM weights because
+            // the safetensors keys (e.g. `norm.weight`, `layers.0.…`) lack the
+            // `model.` prefix that the Swift Qwen3Model struct expects.
+            // Fix: create a temp directory with prefix-mapped weights, then retry.
+            let prefixedDir = try Self.createPrefixedWeightsDirectory(from: directory)
+            container = try await loadModelContainer(
+                directory: prefixedDir,
+                progressHandler: { _ in }
+            )
+        }
+    }
+
+    /// Creates a temporary directory containing model.safetensors with all keys
+    /// prepended with "model.", plus copies of config.json and tokenizer files.
+    private static func createPrefixedWeightsDirectory(from directory: URL) throws -> URL {
+        let fm = FileManager.default
+        let tmpDir = fm.temporaryDirectory.appendingPathComponent("mlx-llm-prefixed-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+
+        // Copy config and tokenizer files
+        for filename in ["config.json", "tokenizer.json", "tokenizer_config.json"] {
+            let src = directory.appendingPathComponent(filename)
+            if fm.fileExists(atPath: src.path) {
+                try fm.copyItem(at: src, to: tmpDir.appendingPathComponent(filename))
+            }
+        }
+
+        // Load weights, add "model." prefix, and write back
+        let weightsURL = directory.appendingPathComponent("model.safetensors")
+        let rawWeights = try loadArrays(url: weightsURL)
+        let prefixed: [String: MLXArray] = Dictionary(uniqueKeysWithValues:
+            rawWeights.map { (key, value) in
+                let newKey = key.hasPrefix("model.") ? key : "model.\(key)"
+                return (newKey, value)
+            }
         )
+        let outURL = tmpDir.appendingPathComponent("model.safetensors")
+        try save(arrays: prefixed, url: outURL)
+        return tmpDir
     }
 
     /// Load model from Hugging Face by id (e.g. "mlx-community/Qwen3-4B-4bit").
