@@ -23,7 +23,48 @@ public enum AceStepEngine {
         #endif
     }
 
+    /// Generate music asynchronously. Preferred over the synchronous `generateMusic` for UI contexts
+    /// because it does not block the calling thread with `DispatchGroup.wait()`.
+    /// Supports Swift cooperative cancellation — cancel the enclosing `Task` to abort between diffusion steps.
+    public static func generateMusicAsync(
+        params: GenerationParams,
+        config: GenerationConfig,
+        progress: ((Double, String) -> Void)?,
+        pipeline: GenerationPipeline?
+    ) async -> GenerationResult {
+        guard let pipe = pipeline, pipe.isInitialized else {
+            return GenerationResult(
+                audios: [],
+                statusMessage: "Pipeline not initialized",
+                extraOutputs: [:],
+                success: false,
+                error: "Pipeline not initialized"
+            )
+        }
+        do {
+            return try await pipe.run(params: params, config: config, progress: progress)
+        } catch is CancellationError {
+            return GenerationResult(
+                audios: [],
+                statusMessage: "Generation cancelled",
+                extraOutputs: [:],
+                success: false,
+                error: "cancelled"
+            )
+        } catch {
+            return GenerationResult(
+                audios: [],
+                statusMessage: "\(error)",
+                extraOutputs: [:],
+                success: false,
+                error: "\(error)"
+            )
+        }
+    }
+
     /// Generate music from params. Returns GenerationResult with audios or error.
+    /// - Note: This synchronous variant blocks the calling thread via `DispatchGroup.wait()`.
+    ///   For UI contexts, use `generateMusicAsync` instead to keep the main thread responsive.
     public static func generateMusic(
         params: GenerationParams,
         config: GenerationConfig,

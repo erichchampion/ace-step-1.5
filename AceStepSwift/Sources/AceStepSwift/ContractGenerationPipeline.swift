@@ -163,6 +163,9 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         
         var apgMomentumState: [String: MLXArray]? = [:]
         for (stepIdx, timestepVal) in schedule.enumerated() {
+            // Cooperative cancellation: check between diffusion steps so cancel takes effect promptly
+            try Task.checkCancellation()
+
             print("[PipelineLoop] stepIdx=\(stepIdx) t=\(timestepVal)")
             
             // Switch to non-cover conditions at step `coverSteps` (Python: audio_cover_strength)
@@ -197,6 +200,9 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             let frac = Double(stepIdx + 1) / Double(schedule.count)
             progress?(frac * 0.9, "Diffusion step \(stepIdx + 1)/\(schedule.count)")
         }
+
+        // Check cancellation before the expensive VAE decode
+        try Task.checkCancellation()
 
         progress?(0.95, "Decoding")
         MLX.GPU.clearCache()

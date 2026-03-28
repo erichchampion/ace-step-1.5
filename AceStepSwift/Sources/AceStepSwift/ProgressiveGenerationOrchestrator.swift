@@ -99,6 +99,9 @@ public enum ProgressiveGenerationOrchestrator {
         var chunkChannels: Int = 2
 
         for chunk in plan.chunks {
+            // Cooperative cancellation between chunks
+            try Task.checkCancellation()
+
             let chunkIdx = chunk.index
 
             progress?(ProgressiveProgressUpdate(
