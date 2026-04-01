@@ -62,8 +62,30 @@ public enum AceStepEngine {
         }
     }
 
+    /// A thread-safe box for retrieving the result of an unstructured task.
+    private final class Box<T>: @unchecked Sendable {
+        var value: T?
+    }
+
+    /// Helper to run an async operation synchronously without strict concurrency warnings.
+    private static func runSynchronousTask<T>(operation: @escaping () async throws -> T) -> Result<T, Error> {
+        let box = Box<Result<T, Error>>()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            do {
+                let res = try await operation()
+                box.value = .success(res)
+            } catch {
+                box.value = .failure(error)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return box.value ?? .failure(NSError(domain: "AceStepEngine", code: -1, userInfo: [NSLocalizedDescriptionKey: "Task completed without result"]))
+    }
+
     /// Generate music from params. Returns GenerationResult with audios or error.
-    /// - Note: This synchronous variant blocks the calling thread via `DispatchGroup.wait()`.
+    /// - Note: This synchronous variant blocks the calling thread via `DispatchSemaphore.wait()`.
     ///   For UI contexts, use `generateMusicAsync` instead to keep the main thread responsive.
     public static func generateMusic(
         params: GenerationParams,
@@ -80,31 +102,23 @@ public enum AceStepEngine {
                 error: "Pipeline not initialized"
             )
         }
-        var result: GenerationResult?
-        let group = DispatchGroup()
-        group.enter()
-        Task {
-            defer { group.leave() }
-            do {
-                result = try await pipe.run(params: params, config: config, progress: progress)
-            } catch {
-                result = GenerationResult(
-                    audios: [],
-                    statusMessage: "\(error)",
-                    extraOutputs: [:],
-                    success: false,
-                    error: "\(error)"
-                )
-            }
+        
+        let result = runSynchronousTask {
+            try await pipe.run(params: params, config: config, progress: progress)
         }
-        group.wait()
-        return result ?? GenerationResult(
-            audios: [],
-            statusMessage: "Unknown error",
-            extraOutputs: [:],
-            success: false,
-            error: "Unknown error"
-        )
+        
+        switch result {
+        case .success(let genResult):
+            return genResult
+        case .failure(let error):
+            return GenerationResult(
+                audios: [],
+                statusMessage: "\(error)",
+                extraOutputs: [:],
+                success: false,
+                error: "\(error)"
+            )
+        }
     }
 
     /// Format caption and lyrics via LLM into structured metadata. Returns FormatSampleResult.
@@ -129,21 +143,15 @@ public enum AceStepEngine {
                 error: "LLM not initialized"
             )
         }
+        
         let cap = caption.trimmingCharacters(in: .whitespaces).isEmpty ? "NO USER INPUT" : caption
         let lyr = lyrics.trimmingCharacters(in: .whitespaces).isEmpty ? "[Instrumental]" : lyrics
-        var outputText: String?
-        let group = DispatchGroup()
-        group.enter()
-        Task {
-            defer { group.leave() }
-            do {
-                outputText = try await provider.generateFormat(caption: cap, lyrics: lyr, userMetadata: userMetadata, temperature: temperature)
-            } catch {
-                outputText = nil
-            }
+        
+        let result = runSynchronousTask {
+            try await provider.generateFormat(caption: cap, lyrics: lyr, userMetadata: userMetadata, temperature: temperature)
         }
-        group.wait()
-        guard let raw = outputText, !raw.isEmpty else {
+        
+        guard case .success(let outputText) = result, !outputText.isEmpty else {
             return FormatSampleResult(
                 caption: "",
                 lyrics: lyr,
@@ -157,7 +165,8 @@ public enum AceStepEngine {
                 error: "Format generation failed"
             )
         }
-        return FormatSampleParser.parseToFormatSampleResult(outputText: raw, fallbackLyrics: lyr)
+        
+        return FormatSampleParser.parseToFormatSampleResult(outputText: outputText, fallbackLyrics: lyr)
     }
 
     /// Returns a random preset for form filling. sampleType: "simple_mode" or "custom_mode" (defaults to "simple_mode").
@@ -181,25 +190,19 @@ public enum AceStepEngine {
                 error: "LLM not initialized"
             )
         }
-        var outputText: String?
-        let group = DispatchGroup()
-        group.enter()
-        Task {
-            defer { group.leave() }
-            do {
-                outputText = try await provider.generateFromQuery(query: query, instrumental: instrumental, vocalLanguage: vocalLanguage, temperature: temperature)
-            } catch {
-                outputText = nil
-            }
+        
+        let result = runSynchronousTask {
+            try await provider.generateFromQuery(query: query, instrumental: instrumental, vocalLanguage: vocalLanguage, temperature: temperature)
         }
-        group.wait()
-        guard let raw = outputText, !raw.isEmpty else {
+        
+        guard case .success(let outputText) = result, !outputText.isEmpty else {
             return CreateSampleResult(
                 statusMessage: "Create sample failed",
                 success: false,
                 error: "Create sample failed"
             )
         }
-        return FormatSampleParser.parseToCreateSampleResult(outputText: raw, instrumental: instrumental)
+        
+        return FormatSampleParser.parseToCreateSampleResult(outputText: outputText, instrumental: instrumental)
     }
 }

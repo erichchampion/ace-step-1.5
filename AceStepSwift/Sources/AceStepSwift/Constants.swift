@@ -15,6 +15,11 @@ public enum AceStepConstants {
     /// We use a deterministic 30s default that works on all device tiers.
     public static let autoDuration: Double = 30.0
 
+    /// Latent channel dimension (DiT/VAE)
+    public static let latentChannels = 64
+    /// Minimum latent length (matches Python conditioning_target padding for short clips)
+    public static let minLatentLength = 128
+
     public static let validTimeSignatures: [Int] = [2, 3, 4, 6]
 
     public static let validLanguages: [String] = [

@@ -53,44 +53,55 @@ public enum AudioStitcher {
                     output[chunkStartFrame * channels + i] = chunkAudio[i]
                 }
             } else {
-                // Overlap with previous chunk
                 let crossfadeFrames = secondsToFrames(effectiveCrossfade, sampleRate: sampleRate)
                 let overlapFrames = secondsToFrames(overlapSec, sampleRate: sampleRate)
-
-                // The crossfade starts at the beginning of this chunk's audio
-                // (which overlaps the previous chunk by overlapFrames)
-                for frame in 0..<chunkFrames {
+                let actualFrames = min(chunkFrames, totalFrames - chunkStartFrame)
+                
+                // 1. Crossfade Region
+                let crossfadeLimit = min(actualFrames, crossfadeFrames)
+                for frame in 0..<crossfadeLimit {
                     let globalFrame = chunkStartFrame + frame
-
-                    guard globalFrame < totalFrames else { break }
-
-                    // Determine blend factor
-                    let alpha: Float
-                    if frame < crossfadeFrames {
-                        // Within crossfade region: blend in
-                        let t = Float(frame) / Float(max(1, crossfadeFrames))
-                        // Equal-power crossfade: incoming uses sin, outgoing uses cos
-                        alpha = sinf(t * .pi / 2.0)
-                    } else {
-                        alpha = 1.0
-                    }
+                    let t = Float(frame) / Float(max(1, crossfadeFrames))
+                    // Raised-cosine (equal-gain) crossfade: preserves amplitude for correlated signals
+                    // and maintains smooth envelope shape.
+                    let alphaSin = sinf(t * .pi / 2.0)
+                    let fadeOut = 1.0 - (alphaSin * alphaSin) // Equivalent to cos^2
+                    let fadeIn = alphaSin * alphaSin
 
                     for ch in 0..<channels {
                         let outputIdx = globalFrame * channels + ch
                         let inputIdx = frame * channels + ch
-
-                        guard outputIdx < output.count, inputIdx < chunkAudio.count else { continue }
-
-                        if frame < crossfadeFrames {
-                            // Crossfade: blend previous (already in output) with new
-                            let outgoing = cosf(Float(frame) / Float(max(1, crossfadeFrames)) * .pi / 2.0)
-                            output[outputIdx] = output[outputIdx] * outgoing + chunkAudio[inputIdx] * alpha
-                        } else if frame < overlapFrames {
-                            // Past crossfade but still in overlap: new chunk takes over
-                            output[outputIdx] = chunkAudio[inputIdx]
-                        } else {
-                            // Past overlap: new chunk only
-                            output[outputIdx] = chunkAudio[inputIdx]
+                        if outputIdx < output.count && inputIdx < chunkAudio.count {
+                            output[outputIdx] = output[outputIdx] * fadeOut + chunkAudio[inputIdx] * fadeIn
+                        }
+                    }
+                }
+                
+                // 2. Overlap Region (Past crossfade, fully faded in)
+                let overlapLimit = min(actualFrames, overlapFrames)
+                if overlapLimit > crossfadeLimit {
+                    for frame in crossfadeLimit..<overlapLimit {
+                        let globalFrame = chunkStartFrame + frame
+                        for ch in 0..<channels {
+                            let outputIdx = globalFrame * channels + ch
+                            let inputIdx = frame * channels + ch
+                            if outputIdx < output.count && inputIdx < chunkAudio.count {
+                                output[outputIdx] = chunkAudio[inputIdx]
+                            }
+                        }
+                    }
+                }
+                
+                // 3. Exclusive Region (Past overlap, pure new chunk)
+                if actualFrames > overlapLimit {
+                    for frame in overlapLimit..<actualFrames {
+                        let globalFrame = chunkStartFrame + frame
+                        for ch in 0..<channels {
+                            let outputIdx = globalFrame * channels + ch
+                            let inputIdx = frame * channels + ch
+                            if outputIdx < output.count && inputIdx < chunkAudio.count {
+                                output[outputIdx] = chunkAudio[inputIdx]
+                            }
                         }
                     }
                 }

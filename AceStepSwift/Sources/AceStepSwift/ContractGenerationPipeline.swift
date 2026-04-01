@@ -22,7 +22,7 @@ private enum ContractGenerationPipelineError: LocalizedError {
         case .conditionBatchMismatch(let name, let expected, let actual):
             return "Condition batch mismatch for \(name): expected batch \(expected), got \(actual). Provide batch-aligned conditioning or batch=1."
         case .invalidLatentShape(let shape):
-            return "Invalid latent shape before VAE decode: \(shape). Expected [B, T, \(latentChannels)]."
+            return "Invalid latent shape before VAE decode: \(shape). Expected [B, T, \(AceStepConstants.latentChannels)]."
         case .invalidDecodedAudioShape(let shape):
             return "Invalid decoded audio shape: \(shape). Expected [B, samples] or [B, samples, channels]."
         }
@@ -30,10 +30,10 @@ private enum ContractGenerationPipelineError: LocalizedError {
 }
 
 /// Latent channel dimension (DiT/VAE).
-private let latentChannels = 64
+/// Defined in AceStepConstants.latentChannels
 
 /// Minimum latent length (matches Python conditioning_target max(128, ...) padding for short clips).
-private let minLatentLength = 128
+/// Defined in AceStepConstants.minLatentLength
 
 /// Returns latent time steps T from duration (seconds) and sample rate.
 /// If duration <= 0, uses `AceStepConstants.autoDuration` as fallback (matches Python's auto-duration behavior).
@@ -45,7 +45,7 @@ public func latentLengthFromDuration(durationSeconds: Double, sampleRate: Int) -
     if t % 2 != 0 {
         t -= 1 // Ensure parity for patch_size=2 downsampling without dropping residuals in CoreML
     }
-    return max(minLatentLength, max(1, t))
+    return max(AceStepConstants.minLatentLength, max(1, t))
 }
 
 /// Optional provider of DiT conditions. Receives params, latent length T (from duration/sample rate), and sample rate
@@ -112,7 +112,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
 
         #if DEBUG
         if let firstT = schedule.first, let lastT = schedule.last {
-            debugPrint("[GenerationDiagnostics] timestep_schedule count=\(schedule.count) first=\(formatStat(Float(firstT))) last=\(formatStat(Float(lastT)))")
+            debugPrint("[GenerationDiagnostics] timestep_schedule count=\(schedule.count) first=\(DiagnosticLogHelpers.formatStat(Float(firstT))) last=\(DiagnosticLogHelpers.formatStat(Float(lastT)))")
         }
         #endif
         progress?(0, "Starting diffusion")
@@ -121,11 +121,11 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         conditions = try alignConditionsToBatch(conditions, batchSize: b)
         #if DEBUG
         if let enc = conditions.encoderHiddenStates, let ctx = conditions.contextLatents {
-            let encStats = tensorMeanStd(enc)
-            let ctxStats = tensorMeanStd(ctx)
+            let encStats = DiagnosticLogHelpers.tensorMeanStd(enc)
+            let ctxStats = DiagnosticLogHelpers.tensorMeanStd(ctx)
             debugPrint(
-                "[ConditioningDiagnostics] pipeline enc(std=\(formatStat(encStats.std)),shape=\(enc.shape)) " +
-                "ctx(std=\(formatStat(ctxStats.std)),shape=\(ctx.shape))"
+                "[ConditioningDiagnostics] pipeline enc(std=\(DiagnosticLogHelpers.formatStat(encStats.std)),shape=\(enc.shape)) " +
+                "ctx(std=\(DiagnosticLogHelpers.formatStat(ctxStats.std)),shape=\(ctx.shape))"
             )
         }
         #endif
@@ -141,7 +141,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             #endif
         }
         let key: MLXArray? = (params.seed >= 0) ? MLXRandom.key(UInt64(params.seed)) : nil
-        let noise = MLXRandom.normal([b, t, latentChannels], key: key)
+        let noise = MLXRandom.normal([b, t, AceStepConstants.latentChannels], key: key)
         var xt: MLXArray
         if let initial = conditions.initialLatents, initial.shape[0] == b, initial.shape[1] == t {
             xt = initial
@@ -149,9 +149,9 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             xt = noise
         }
         #if DEBUG
-        let initialStats = tensorMeanStd(xt)
+        let initialStats = DiagnosticLogHelpers.tensorMeanStd(xt)
         debugPrint(
-            "[GenerationDiagnostics] initial_latent mean=\(formatStat(initialStats.mean)) std=\(formatStat(initialStats.std))"
+            "[GenerationDiagnostics] initial_latent mean=\(DiagnosticLogHelpers.formatStat(initialStats.mean)) std=\(DiagnosticLogHelpers.formatStat(initialStats.std))"
         )
         #endif
 
@@ -190,11 +190,11 @@ public final class ContractGenerationPipeline: GenerationPipeline {
                 momentumState: &apgMomentumState
             )
             #if DEBUG
-            let stepStats = tensorMeanStd(xt)
+            let stepStats = DiagnosticLogHelpers.tensorMeanStd(xt)
             let vtDiff = previousLatent - xt
-            let vtStats = tensorMeanStd(vtDiff)
+            let vtStats = DiagnosticLogHelpers.tensorMeanStd(vtDiff)
             debugPrint(
-                "[GenerationDiagnostics] step=\(stepIdx + 1)/\(schedule.count) t=\(formatStat(Float(timestepVal))) latent_mean=\(formatStat(stepStats.mean)) latent_std=\(formatStat(stepStats.std)) vtDiff_mean=\(formatStat(vtStats.mean)) vtDiff_std=\(formatStat(vtStats.std))"
+                "[GenerationDiagnostics] step=\(stepIdx + 1)/\(schedule.count) t=\(DiagnosticLogHelpers.formatStat(Float(timestepVal))) latent_mean=\(DiagnosticLogHelpers.formatStat(stepStats.mean)) latent_std=\(DiagnosticLogHelpers.formatStat(stepStats.std)) vtDiff_mean=\(DiagnosticLogHelpers.formatStat(vtStats.mean)) vtDiff_std=\(DiagnosticLogHelpers.formatStat(vtStats.std))"
             )
             #endif
             let frac = Double(stepIdx + 1) / Double(schedule.count)
@@ -210,7 +210,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         if params.latentShift != 0.0 || params.latentRescale != 1.0 {
             decodeLatent = decodeLatent * Float(params.latentRescale) + Float(params.latentShift)
         }
-        guard decodeLatent.ndim == 3, decodeLatent.dim(2) == latentChannels else {
+        guard decodeLatent.ndim == 3, decodeLatent.dim(2) == AceStepConstants.latentChannels else {
             throw ContractGenerationPipelineError.invalidLatentShape(decodeLatent.shape)
         }
         #if DEBUG
@@ -278,20 +278,20 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             let t = 0..<audio.dim(1)
             let left = audio[b0, t, 0..<1].squeezed(axis: 2)
             let right = audio[b0, t, 1..<2].squeezed(axis: 2)
-            let lStats = tensorMeanStd(left)
-            let rStats = tensorMeanStd(right)
+            let lStats = DiagnosticLogHelpers.tensorMeanStd(left)
+            let rStats = DiagnosticLogHelpers.tensorMeanStd(right)
             debugPrint(
-                "[ChannelDiagnostics] directIndexing L(mean=\(formatStat(lStats.mean)),std=\(formatStat(lStats.std))) " +
-                "R(mean=\(formatStat(rStats.mean)),std=\(formatStat(rStats.std)))"
+                "[ChannelDiagnostics] directIndexing L(mean=\(DiagnosticLogHelpers.formatStat(lStats.mean)),std=\(DiagnosticLogHelpers.formatStat(lStats.std))) " +
+                "R(mean=\(DiagnosticLogHelpers.formatStat(rStats.mean)),std=\(DiagnosticLogHelpers.formatStat(rStats.std)))"
             )
         }
         #endif
         audio = normalizePeakIfNeeded(audio)
         #if DEBUG
-        let audioStats = tensorMeanStd(audio)
+        let audioStats = DiagnosticLogHelpers.tensorMeanStd(audio)
         let audioPeak = MLX.abs(audio).max().item(Float.self)
         debugPrint(
-            "[GenerationDiagnostics] final_audio shape=\(audio.shape) peak=\(formatStat(audioPeak)) mean=\(formatStat(audioStats.mean)) std=\(formatStat(audioStats.std))"
+            "[GenerationDiagnostics] final_audio shape=\(audio.shape) peak=\(DiagnosticLogHelpers.formatStat(audioPeak)) mean=\(DiagnosticLogHelpers.formatStat(audioStats.mean)) std=\(DiagnosticLogHelpers.formatStat(audioStats.std))"
         )
         #endif
         audio.eval()
@@ -450,24 +450,6 @@ public final class ContractGenerationPipeline: GenerationPipeline {
         return audio / safePeak
     }
 
-    private func tensorMeanStd(_ x: MLXArray) -> (mean: Float, std: Float) {
-        let mean = x.mean().item(Float.self)
-        let centered = x - MLXArray(mean)
-        let variance = (centered * centered).mean().item(Float.self)
-        return (mean, sqrt(max(variance, 0.0)))
-    }
-
-    private func formatStat(_ value: Float) -> String {
-        String(format: "%.6f", value)
-    }
-
-    private func stats(_ x: [Float]) -> (mean: Float, std: Float) {
-        guard !x.isEmpty else { return (0, 0) }
-        let mean = x.reduce(0, +) / Float(x.count)
-        let variance = x.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Float(x.count)
-        return (mean, sqrt(max(variance, 0.0)))
-    }
-
     /// Build audios list from decoded [B, samples] or [B, L, C] (e.g. stereo) array.
     private func buildAudiosFromDecoded(_ audio: MLXArray) -> [[String: Any]] {
         let shape = audio.shape
@@ -512,19 +494,19 @@ public final class ContractGenerationPipeline: GenerationPipeline {
                     leftInterleaved.append(slice[j])
                     rightInterleaved.append(slice[j + 1])
                 }
-                let interLeft = stats(leftInterleaved)
-                let interRight = stats(rightInterleaved)
+                let interLeft = DiagnosticLogHelpers.stats(leftInterleaved)
+                let interRight = DiagnosticLogHelpers.stats(rightInterleaved)
 
                 let half = slice.count / 2
                 let leftChannelsFirst = Array(slice[0..<half])
                 let rightChannelsFirst = Array(slice[half..<(half * 2)])
-                let cfLeft = stats(leftChannelsFirst)
-                let cfRight = stats(rightChannelsFirst)
+                let cfLeft = DiagnosticLogHelpers.stats(leftChannelsFirst)
+                let cfRight = DiagnosticLogHelpers.stats(rightChannelsFirst)
 
-                let preview = Array(slice.prefix(12)).map { formatStat($0) }.joined(separator: ",")
+                let preview = Array(slice.prefix(12)).map { DiagnosticLogHelpers.formatStat($0) }.joined(separator: ",")
                 debugPrint(
-                    "[LayoutDiagnostics] batch=\(i) interleaved(Lstd=\(formatStat(interLeft.std)),Rstd=\(formatStat(interRight.std)),Lmean=\(formatStat(interLeft.mean)),Rmean=\(formatStat(interRight.mean))) " +
-                    "channelsFirst(Lstd=\(formatStat(cfLeft.std)),Rstd=\(formatStat(cfRight.std)),Lmean=\(formatStat(cfLeft.mean)),Rmean=\(formatStat(cfRight.mean))) first12=[\(preview)]"
+                    "[LayoutDiagnostics] batch=\(i) interleaved(Lstd=\(DiagnosticLogHelpers.formatStat(interLeft.std)),Rstd=\(DiagnosticLogHelpers.formatStat(interRight.std)),Lmean=\(DiagnosticLogHelpers.formatStat(interLeft.mean)),Rmean=\(DiagnosticLogHelpers.formatStat(interRight.mean))) " +
+                    "channelsFirst(Lstd=\(DiagnosticLogHelpers.formatStat(cfLeft.std)),Rstd=\(DiagnosticLogHelpers.formatStat(cfRight.std)),Lmean=\(DiagnosticLogHelpers.formatStat(cfLeft.mean)),Rmean=\(DiagnosticLogHelpers.formatStat(cfRight.mean))) first12=[\(preview)]"
                 )
             }
             #endif
