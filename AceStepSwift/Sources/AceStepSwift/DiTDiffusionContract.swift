@@ -23,6 +23,8 @@ public struct DiTConditions {
     public var nullConditionEmbedding: MLXArray?
     /// When non-nil, pipeline uses this as the initial latent (e.g. encoded src_audio or repaint base). When nil, starts from noise.
     public var initialLatents: MLXArray?
+    /// ADG condition embedding [B, encL, D] used for Adaptive Dual Guidance (usually text-only hidden states).
+    public var adgEncoderHiddenStates: MLXArray?
     /// When non-nil with audioCoverStrength < 1.0, the pipeline switches to these conditions
     /// at step `cover_steps` to transition from cover to text2music mode mid-diffusion.
     /// Uses `Box` wrapper to avoid recursive struct (Swift value type limitation).
@@ -34,6 +36,7 @@ public struct DiTConditions {
         encoderAttentionMask: MLXArray? = nil,
         nullConditionEmbedding: MLXArray? = nil,
         initialLatents: MLXArray? = nil,
+        adgEncoderHiddenStates: MLXArray? = nil,
         nonCoverConditions: DiTConditions? = nil
     ) {
         self.encoderHiddenStates = encoderHiddenStates
@@ -41,6 +44,7 @@ public struct DiTConditions {
         self.encoderAttentionMask = encoderAttentionMask
         self.nullConditionEmbedding = nullConditionEmbedding
         self.initialLatents = initialLatents
+        self.adgEncoderHiddenStates = adgEncoderHiddenStates
         self.nonCoverConditions = nonCoverConditions.map { Box($0) }
     }
 }

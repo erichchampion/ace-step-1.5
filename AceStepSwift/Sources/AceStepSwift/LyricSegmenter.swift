@@ -154,13 +154,12 @@ public enum LyricSegmenter {
         for (cIdx, sectionIndices) in chunkSections.enumerated() {
             var parts: [String] = []
 
-            // Add context line from previous chunk's last section
+            // Add context lines from previous chunk's last section
             if cIdx > 0, let prevLast = chunkSections[cIdx - 1].last {
                 let prevSection = sections[prevLast]
                 let nonEmptyLines = prevSection.lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                if let lastLine = nonEmptyLines.last {
-                    parts.append(lastLine)
-                }
+                let contextLines = Array(nonEmptyLines.suffix(2))
+                parts.append(contentsOf: contextLines)
             }
 
             for sIdx in sectionIndices {
@@ -171,13 +170,12 @@ public enum LyricSegmenter {
                 parts.append(contentsOf: section.lines)
             }
 
-            // Add context line for next chunk's first section
+            // Add context lines for next chunk's first section
             if cIdx < chunks.count - 1, let nextFirst = chunkSections[cIdx + 1].first {
                 let nextSection = sections[nextFirst]
                 let nonEmptyLines = nextSection.lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                if let firstLine = nonEmptyLines.first {
-                    parts.append(firstLine)
-                }
+                let contextLines = Array(nonEmptyLines.prefix(2))
+                parts.append(contentsOf: contextLines)
             }
 
             result.append(parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
@@ -228,16 +226,18 @@ public enum LyricSegmenter {
             let chunkLines = Array(lines[max(0, startLine)..<max(startLine, endLine)])
             var parts: [String] = []
 
-            // Context: last line from previous chunk
+            // Context: last lines from previous chunk
             if cIdx > 0 && startLine > 0 {
-                parts.append(lines[startLine - 1])
+                let ctxStart = max(0, startLine - 2)
+                parts.append(contentsOf: lines[ctxStart..<startLine])
             }
 
             parts.append(contentsOf: chunkLines)
 
-            // Context: first line of next chunk
+            // Context: first lines of next chunk
             if cIdx < chunks.count - 1 && endLine < totalLines {
-                parts.append(lines[endLine])
+                let ctxEnd = min(totalLines, endLine + 2)
+                parts.append(contentsOf: lines[endLine..<ctxEnd])
             }
 
             result.append(parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))

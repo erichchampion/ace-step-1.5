@@ -142,11 +142,27 @@ public func prepareCondition(inputs: PrepareConditionInputs, conditionEncoder: C
         return (inputs.precomputedEncoderHiddenStates, inputs.precomputedEncoderAttentionMask)
     }()
 
+    let adgEncoderHiddenStates: MLXArray? = {
+        if let encoder = conditionEncoder, let textHidden = inputs.textHiddenStates {
+            let (enc, _) = encoder.call(
+                textHiddenStates: textHidden,
+                textAttentionMask: inputs.textAttentionMask,
+                lyricHiddenStates: nil,
+                lyricAttentionMask: nil,
+                referAudioPacked: nil,
+                referAudioOrderMask: nil
+            )
+            return enc
+        }
+        return nil
+    }()
+
     return DiTConditions(
         encoderHiddenStates: encoderHiddenStates,
         contextLatents: contextLatents,
         encoderAttentionMask: encoderAttentionMask,
         nullConditionEmbedding: inputs.nullConditionEmbedding,
-        initialLatents: inputs.initialLatents
+        initialLatents: inputs.initialLatents,
+        adgEncoderHiddenStates: adgEncoderHiddenStates
     )
 }

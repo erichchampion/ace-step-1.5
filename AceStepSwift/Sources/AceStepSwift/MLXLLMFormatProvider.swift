@@ -84,7 +84,7 @@ public final class MLXLLMFormatProvider: LLMFormatProvider {
     }
 
     /// Python: DEFAULT_LM_INSTRUCTION = "Generate audio semantic tokens based on the given conditions:"
-    private static let formatSystemPrompt = "# Instruction\nGenerate audio semantic tokens based on the given conditions:\n\n"
+    private static let formatSystemPrompt = "# Instruction\nGenerate audio semantic tokens based on the given conditions. Ensure lyrics are formatted with clear phrasing, using punctuation like commas to guide precise pacing and pronunciation, minimizing dropped words:\n\n"
 
     /// Python: DEFAULT_LM_INSPIRED_INSTRUCTION = "Expand the user's input into a more detailed and specific musical description:"
     private static let inspirationSystemPrompt = "# Instruction\nExpand the user's input into a more detailed and specific musical description:\n\n"

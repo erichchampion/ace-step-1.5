@@ -46,6 +46,7 @@ public struct GenerationParams {
     public var useCotCaption: Bool
     public var useCotLanguage: Bool
     public var useConstrainedDecoding: Bool
+    public var apgNormThreshold: Double
 
     public init(
         taskType: String = "text2music",
@@ -88,7 +89,8 @@ public struct GenerationParams {
         useCotMetas: Bool = true,
         useCotCaption: Bool = true,
         useCotLanguage: Bool = true,
-        useConstrainedDecoding: Bool = true
+        useConstrainedDecoding: Bool = true,
+        apgNormThreshold: Double = 5.0
     ) {
         self.taskType = taskType
         self.instruction = instruction
@@ -131,6 +133,7 @@ public struct GenerationParams {
         self.useCotCaption = useCotCaption
         self.useCotLanguage = useCotLanguage
         self.useConstrainedDecoding = useConstrainedDecoding
+        self.apgNormThreshold = apgNormThreshold
     }
 
     public static func isBPMValid(_ bpm: Int) -> Bool {

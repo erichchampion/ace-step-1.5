@@ -360,24 +360,37 @@ public final class ContractGenerationPipeline: GenerationPipeline {
             )
         }
 
+        let applyCFG = params.cfgIntervalStart <= Double(timestep) && Double(timestep) <= params.cfgIntervalEnd
+        let applyADG = params.useAdg && applyCFG && conditions.adgEncoderHiddenStates != nil
+
         let b = currentLatent.dim(0)
         let t = currentLatent.dim(1)
         let c = currentLatent.dim(2)
 
         let predCond: MLXArray
         let predUncond: MLXArray
+        var predAdg: MLXArray? = nil
 
         if let mlxStepper = stepper as? MLXDiTStepper {
-            // MLX Optimized Path: run shared forward pass with doubled batch [2*B, ...]
-            let xIn = concatenated([currentLatent, currentLatent], axis: 0)
+            // MLX Optimized Path: run shared forward pass with doubled or tripled batch
+            var latentsToConcat = [currentLatent, currentLatent]
             let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
-            let encDoubled = concatenated([enc, nullExpanded], axis: 0)
-            let ctxDoubled = concatenated([ctx, ctx], axis: 0)
-            let maskDoubled: MLXArray? = conditions.encoderAttentionMask.map { concatenated([$0, $0], axis: 0) }
+            var encsToConcat = [enc, nullExpanded]
+            var ctxsToConcat = [ctx, ctx]
+            var masksToConcat: [MLXArray]? = conditions.encoderAttentionMask.map { [$0, $0] }
+
+            if applyADG {
+                latentsToConcat.append(currentLatent)
+                encsToConcat.append(conditions.adgEncoderHiddenStates!)
+                ctxsToConcat.append(ctx)
+                masksToConcat?.append(conditions.encoderAttentionMask!)
+            }
+
+            let xIn = concatenated(latentsToConcat, axis: 0)
             let cfgConditions = DiTConditions(
-                encoderHiddenStates: encDoubled,
-                contextLatents: ctxDoubled,
-                encoderAttentionMask: maskDoubled,
+                encoderHiddenStates: concatenated(encsToConcat, axis: 0),
+                contextLatents: concatenated(ctxsToConcat, axis: 0),
+                encoderAttentionMask: masksToConcat.map { concatenated($0, axis: 0) },
                 nullConditionEmbedding: nil,
                 initialLatents: nil
             )
@@ -386,12 +399,15 @@ public final class ContractGenerationPipeline: GenerationPipeline {
                 currentLatent: xIn,
                 timestep: timestep,
                 conditions: cfgConditions,
-                useCache: false // Cross-attention cache currently expects stable batch dimension
+                useCache: false
             )
             predCond = vtDoubled[0..<b, 0..<t, 0..<c]
             predUncond = vtDoubled[b..<(b * 2), 0..<t, 0..<c]
+            if applyADG {
+                predAdg = vtDoubled[(b * 2)..<(b * 3), 0..<t, 0..<c]
+            }
         } else {
-            // General Path (e.g. CoreML): run two sequential forward passes
+            // General Path (e.g. CoreML): run sequential forward passes
             // 1. Conditional branch
             predCond = stepper.predictVelocity(
                 currentLatent: currentLatent,
@@ -400,7 +416,7 @@ public final class ContractGenerationPipeline: GenerationPipeline {
                 useCache: true
             )
 
-            // 2. Unconditional branch (using nullConditionEmbedding instead of normal encoder hidden states)
+            // 2. Unconditional branch
             let nullExpanded = MLX.broadcast(nullCond, to: enc.shape)
             var uncondConditions = conditions
             uncondConditions.encoderHiddenStates = nullExpanded
@@ -411,17 +427,32 @@ public final class ContractGenerationPipeline: GenerationPipeline {
                 conditions: uncondConditions,
                 useCache: true
             )
+
+            // 3. ADG branch
+            if applyADG {
+                var adgConditions = conditions
+                adgConditions.encoderHiddenStates = conditions.adgEncoderHiddenStates
+                predAdg = stepper.predictVelocity(
+                    currentLatent: currentLatent,
+                    timestep: timestep,
+                    conditions: adgConditions,
+                    useCache: true
+                )
+            }
         }
 
-        let applyCFG = params.cfgIntervalStart <= Double(timestep) && Double(timestep) <= params.cfgIntervalEnd
-        let vt: MLXArray
+        var vt: MLXArray
         if applyCFG {
             vt = apgForward(
                 predCond: predCond,
                 predUncond: predUncond,
                 guidanceScale: Float(params.guidanceScale),
-                momentumState: &momentumState
+                momentumState: &momentumState,
+                normThreshold: Float(params.apgNormThreshold)
             )
+            if let adg = predAdg {
+                vt = vt + (Float(params.guidanceScale) - 1.0) * (predCond - adg)
+            }
         } else {
             vt = predCond
         }
