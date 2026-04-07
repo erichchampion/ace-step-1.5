@@ -422,8 +422,8 @@ def main():
                         torch.randn((1,), dtype=torch.float32), torch.ones((1, 128), dtype=torch.float32),
                         torch.randn((1, 100, 2048), dtype=torch.float32), torch.randn((1, 100), dtype=torch.float32),
                         torch.randn((1, 128, 128), dtype=torch.float32), 
-                        torch.arange(64, dtype=torch.int64).unsqueeze(0),
-                        torch.arange(64, dtype=torch.int64),
+                        torch.arange(64, dtype=torch.int32).unsqueeze(0),
+                        torch.arange(64, dtype=torch.int32),
                         sw_mask_trace
                     )
                     # Note: downseq = seq/2 due to patch_size=2
@@ -575,6 +575,13 @@ def main():
             if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 torch.mps.empty_cache()
             
+            # Define bypass ops globally depending on model type
+            is_vae_model = item.name == "vae" or item.name == "vae_encoder"
+            bypass_ops = {"embedding": None}
+            if not is_vae_model:
+                bypass_ops["conv"] = None
+                bypass_ops["conv_transpose"] = None
+            
             # Apply optional pre-palettization pruning (sparse palettization)
             source_mlmodel = mlmodel
             if args.sparse > 0:
@@ -585,7 +592,7 @@ def main():
                 )
                 prune_opt = ct.optimize.coreml.OptimizationConfig(
                     global_config=prune_config,
-                    op_type_configs={"conv": None, "conv_transpose": None, "embedding": None}
+                    op_type_configs=bypass_ops
                 )
                 source_mlmodel = ct.optimize.coreml.prune_weights(mlmodel, config=prune_opt)
                 log(f"  [Sparse] Pruning complete — {args.sparse*100:.0f}% of weights zeroed")
@@ -613,7 +620,7 @@ def main():
                         op_config = ct.optimize.coreml.OpPalettizerConfig(**palette_kwargs)
                         config = ct.optimize.coreml.OptimizationConfig(
                             global_config=op_config,
-                            op_type_configs={"conv": None, "conv_transpose": None, "embedding": None}
+                            op_type_configs=bypass_ops
                         )
                         compressed_mlmodel = ct.optimize.coreml.palettize_weights(source_mlmodel, config=config)
                         log(f"  [{bits}-bit] Saving to '{output_path}'...")
@@ -623,11 +630,10 @@ def main():
                         if 'compressed_mlmodel' in locals(): del compressed_mlmodel
                         compressed_mlmodel = None
                         gc.collect()
-                    log(f"  [{bits}-bit] Successfully created '{output_path}'.")
                     if null_emb is not None:
                         import safetensors.torch
                         null_path = output_path / "null_condition_embedding.safetensors"
-                        safetensors.torch.save_file({"null_condition_emb": null_emb}, null_path)
+                        safetensors.torch.save_file({"null_condition_emb": null_emb}, str(null_path))
                         log(f"  [{bits}-bit] Saved null_condition_embedding.safetensors to '{output_path}'.")
                     if encoder_tensors is not None:
                         import safetensors.torch
