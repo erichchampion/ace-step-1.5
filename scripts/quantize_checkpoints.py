@@ -269,8 +269,9 @@ def main():
                         def forward(self, audio):
                             # encoder returns [B, 128, T'] (mean + log_scale concatenated)
                             h = self.m.encoder(audio)
-                            # Split to get mean (first 64 channels)
-                            return h[:, :64, :]
+                            # Split to get mean (first 64 channels) - use chunk to avoid dynamic slice
+                            h_mean, _ = h.chunk(2, dim=1)
+                            return h_mean
                     wrapped_model = VAEEncoderWrapper(model).eval()
                 else:
                     # VAE Decoder: latents [1, 64, T] → audio [1, 2, T']
@@ -371,6 +372,34 @@ def main():
                     
                     acestep_module.create_4d_mask = patched_create_4d_mask
                     log("  [Patch] Applied create_4d_mask patch to bypass JIT int() cast bugs.")
+
+                    # Patch prepare_condition to avoid dynamic slicing that breaks CoreML type inference
+                    # The pattern silence_latent[:, :src_latents.shape[1], :] causes slice_by_index errors
+                    try:
+                        if hasattr(model, 'prepare_condition'):
+                            original_prepare_condition = model.prepare_condition
+                            def patched_prepare_condition(**kwargs):
+                                # Fix silence_latent slicing - use src_latents size that matches trace input
+                                src_latents = kwargs.get('src_latents')
+                                silence_latent = kwargs.get('silence_latent')
+                                if src_latents is not None and silence_latent is not None:
+                                    # During tracing, src_latents has shape from example_input
+                                    # Use the actual size from src_latents to slice silence_latent
+                                    src_len = src_latents.shape[1]
+                                    if silence_latent.shape[1] >= src_len:
+                                        kwargs['silence_latent'] = silence_latent[:, :src_len, :]
+                                    else:
+                                        # Pad silence_latent if needed
+                                        pad_len = src_len - silence_latent.shape[1]
+                                        kwargs['silence_latent'] = torch.cat([
+                                            silence_latent,
+                                            silence_latent[:, :pad_len, :]
+                                        ], dim=1)
+                                return original_prepare_condition(**kwargs)
+                            model.prepare_condition = patched_prepare_condition
+                            log("  [Patch] Applied prepare_condition patch to fix dynamic slicing.")
+                    except Exception as e:
+                        log(f"  [Patch Warning] Could not patch prepare_condition: {e}")
 
                     class AcestepWrapper(torch.nn.Module):
                         def __init__(self, m):

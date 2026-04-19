@@ -1502,7 +1502,12 @@ class AceStepDiTModel(AceStepPreTrainedModel):
         hidden_states = self.proj_out(hidden_states)
         
         # Crop back to original sequence length to ensure exact length match (remove padding)
-        hidden_states = hidden_states[:, :original_seq_len, :]
+        # CoreML-compatible fix: compute crop based on runtime shape divisibility
+        # instead of captured original_seq_len/pad_length variables
+        if self.patch_size > 0 and hidden_states.shape[1] % self.patch_size != 0:
+            crop_amt = self.patch_size - (hidden_states.shape[1] % self.patch_size)
+            if crop_amt < hidden_states.shape[1]:
+                hidden_states = hidden_states[:, :-crop_amt, :]
         
         outputs = (hidden_states, past_key_values)
 
